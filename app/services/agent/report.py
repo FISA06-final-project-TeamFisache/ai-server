@@ -1,16 +1,13 @@
-from app.schemas.agent import KeyMetrics, ReportRequest, ReportResponse
+from app.schemas.agent import PortfolioComposition, ReportRequest, ReportResponse
 
 
 async def generate_report(request: ReportRequest) -> ReportResponse:
     # TODO: LangGraph 연동
-    total_spending = sum(t.amount for t in request.transactions)
     return ReportResponse(
-        user_id=request.user_id,
-        year_month=request.year_month,
-        report_markdown="[STUB] ## 월간 리포트\n\n분석 결과가 여기에 표시됩니다.",
-        key_metrics=KeyMetrics(
-            total_spending=total_spending,
-            savings_rate=0.0,
-            top_categories=[],
+        ai_comment="[STUB] 이전 포트폴리오 대비 현재 포트폴리오 분석 결과가 여기에 표시됩니다.",
+        new_ratio=PortfolioComposition(
+            cash_pct=0.0,
+            stocks_etf_pct=0.0,
+            bonds_pct=0.0,
         ),
     )
