@@ -1,10 +1,4 @@
-from app.schemas.agent import (
-    PortfolioComposition,
-    TravelBudget,
-    TravelRequest,
-    TravelResponse,
-    TravelStyle,
-)
+from app.schemas.agent import TravelBudget, TravelRequest, TravelResponse, TravelStyle
 
 _DAILY_RATES = {
     TravelStyle.budget: {"accommodation": 80_000, "food": 40_000, "transportation": 20_000, "sightseeing": 30_000},
@@ -31,11 +25,5 @@ async def build_travel(request: TravelRequest) -> TravelResponse:
             transportation=transportation,
             sightseeing=sightseeing,
             total=accommodation + flight + food + transportation + sightseeing,
-        ),
-        annual_return_rate=4.5,
-        portfolio_composition=PortfolioComposition(
-            cash_pct=50.0,
-            stocks_etf_pct=30.0,
-            bonds_pct=20.0,
         ),
     )

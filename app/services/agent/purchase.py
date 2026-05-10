@@ -1,9 +1,4 @@
-from app.schemas.agent import (
-    PortfolioComposition,
-    PurchaseCandidate,
-    PurchaseRequest,
-    PurchaseResponse,
-)
+from app.schemas.agent import PurchaseCandidate, PurchaseRequest, PurchaseResponse
 
 
 async def build_purchase(request: PurchaseRequest) -> PurchaseResponse:
@@ -17,10 +12,4 @@ async def build_purchase(request: PurchaseRequest) -> PurchaseResponse:
             PurchaseCandidate(product_name=f"[STUB] {item} 중급형", estimated_price=1_000_000, description="무난한 선택"),
             PurchaseCandidate(product_name=f"[STUB] {item} 프리미엄", estimated_price=2_000_000, description="고사양 모델"),
         ],
-        annual_return_rate=3.5,
-        portfolio_composition=PortfolioComposition(
-            cash_pct=60.0,
-            stocks_etf_pct=20.0,
-            bonds_pct=20.0,
-        ),
     )

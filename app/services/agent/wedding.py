@@ -1,10 +1,4 @@
-from app.schemas.agent import (
-    PortfolioComposition,
-    WeddingBudget,
-    WeddingRequest,
-    WeddingResponse,
-    WeddingScale,
-)
+from app.schemas.agent import WeddingBudget, WeddingRequest, WeddingResponse, WeddingScale
 
 _VENUE = {WeddingScale.small: 5_000_000, WeddingScale.medium: 15_000_000, WeddingScale.large: 30_000_000}
 _HONEYMOON = {WeddingScale.small: 3_000_000, WeddingScale.medium: 8_000_000, WeddingScale.large: 20_000_000}
@@ -23,11 +17,5 @@ async def build_wedding(request: WeddingRequest) -> WeddingResponse:
             honeymoon=honeymoon,
             sdrme=sdrme,
             total=venue + honeymoon + sdrme,
-        ),
-        annual_return_rate=4.0,
-        portfolio_composition=PortfolioComposition(
-            cash_pct=40.0,
-            stocks_etf_pct=30.0,
-            bonds_pct=30.0,
         ),
     )

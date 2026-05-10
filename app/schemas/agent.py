@@ -1,35 +1,10 @@
 from datetime import datetime
 from enum import Enum
-from typing import Literal
 
 from pydantic import BaseModel
 
 
-class CurrentAssets(BaseModel):
-    cash: float = 0
-    stocks: float = 0
-    funds: float = 0
-
-
-class PortfolioRequest(BaseModel):
-    user_id: str
-    goal: str
-    current_assets: CurrentAssets
-    risk_tolerance: Literal["low", "moderate", "high"]
-
-
-class AssetAllocation(BaseModel):
-    asset_type: str
-    allocation_pct: float
-    reason: str
-
-
-class PortfolioResponse(BaseModel):
-    user_id: str
-    recommended_portfolio: list[AssetAllocation]
-    summary: str
-    generated_at: datetime
-
+# ── Rebalance / Report ──────────────────────────────────────────────────────
 
 class AllocationItem(BaseModel):
     category: str
@@ -93,12 +68,19 @@ class PortfolioComposition(BaseModel):
 
 class PortfolioGoalBase(BaseModel):
     user_id: str
-    duration_months: int   # 달성 기간 (개월)
+    duration_months: int    # 달성 기간 (개월)
     initial_capital: float  # 초기 자본금 (원)
 
 
-class PortfolioGoalDefaultOutput(BaseModel):
-    annual_return_rate: float       # 연 평균 수익률 (%)
+# ── /agent/portfolio ────────────────────────────────────────────────────────
+
+class PortfolioRequest(PortfolioGoalBase):
+    target_amount: float  # 사용자가 확정한 총 비용 (원)
+
+
+class PortfolioResponse(BaseModel):
+    user_id: str
+    annual_return_rate: float
     portfolio_composition: PortfolioComposition
 
 
@@ -108,7 +90,7 @@ class SeedMoneyRequest(PortfolioGoalBase):
     target_amount: float  # 목표 금액 (원)
 
 
-class SeedMoneyResponse(PortfolioGoalDefaultOutput):
+class SeedMoneyResponse(BaseModel):
     user_id: str
     target_amount: float
     required_monthly_savings: float  # 월 필요 저축액 (원)
@@ -136,7 +118,7 @@ class WeddingBudget(BaseModel):
     total: float
 
 
-class WeddingResponse(PortfolioGoalDefaultOutput):
+class WeddingResponse(BaseModel):
     user_id: str
     budget: WeddingBudget
 
@@ -164,7 +146,7 @@ class TravelBudget(BaseModel):
     total: float
 
 
-class TravelResponse(PortfolioGoalDefaultOutput):
+class TravelResponse(BaseModel):
     user_id: str
     budget: TravelBudget
 
@@ -181,7 +163,7 @@ class PurchaseCandidate(BaseModel):
     description: str
 
 
-class PurchaseResponse(PortfolioGoalDefaultOutput):
+class PurchaseResponse(BaseModel):
     user_id: str
     item_name: str
     candidates: list[PurchaseCandidate]
