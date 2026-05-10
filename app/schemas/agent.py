@@ -1,4 +1,3 @@
-from datetime import datetime
 from enum import Enum
 
 from pydantic import BaseModel
@@ -31,39 +30,30 @@ class RebalanceResponse(BaseModel):
     summary: str
 
 
-class Transaction(BaseModel):
-    transaction_id: str
-    amount: float
-    category: str
-    timestamp: datetime
-
-
-class ReportRequest(BaseModel):
-    user_id: str
-    year_month: str
-    transactions: list[Transaction]
-    portfolio_snapshot: dict
-
-
-class KeyMetrics(BaseModel):
-    total_spending: float
-    savings_rate: float
-    top_categories: list[str]
-
-
-class ReportResponse(BaseModel):
-    user_id: str
-    year_month: str
-    report_markdown: str
-    key_metrics: KeyMetrics
-
-
-# ── 목표 포트폴리오 Agent 공통 ──────────────────────────────────────────────
-
 class PortfolioComposition(BaseModel):
     cash_pct: float
     stocks_etf_pct: float
     bonds_pct: float
+
+
+class PortfolioFinancials(BaseModel):
+    total_income: int
+    total_expense: int
+    surplus: int
+
+
+class ReportRequest(BaseModel):
+    user_id: str
+    prev_portfolio: PortfolioFinancials
+    cur_portfolio: PortfolioFinancials
+
+
+class ReportResponse(BaseModel):
+    ai_comment: str
+    new_ratio: PortfolioComposition
+
+
+# ── 목표 포트폴리오 Agent 공통 ──────────────────────────────────────────────
 
 
 class PortfolioGoalBase(BaseModel):
