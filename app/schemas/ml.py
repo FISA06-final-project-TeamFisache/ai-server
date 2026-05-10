@@ -4,46 +4,46 @@ from typing import Literal
 from pydantic import BaseModel
 
 
-class TransactionItem(BaseModel):
-    transaction_id: str
-    amount: float
-    category: str
-    timestamp: datetime
+class ApprovedTransaction(BaseModel):
+    approved_dtime: datetime
+    approved_amt: float
+    approved_type: str
+    merchant_name: str
+    is_canceled: bool
 
 
 class AnomalyRequest(BaseModel):
     user_id: str
-    transactions: list[TransactionItem]
-
-
-class AnomalyResult(BaseModel):
-    transaction_id: str
-    is_anomaly: bool
-    anomaly_score: float
+    approved_list: list[ApprovedTransaction]
 
 
 class AnomalyResponse(BaseModel):
-    user_id: str
-    results: list[AnomalyResult]
+    title: str
+    content: str
+
+
+class Transaction(BaseModel):
+    trans_dtime: str
+    trans_type: str
+    trans_class: str
+    trans_amt: float
+    balance_amt: float
+    trans_memo: str
 
 
 class RecommendRequest(BaseModel):
     user_id: str
-    age: int
-    income_level: Literal["low", "middle", "high"]
-    risk_tolerance: str
-    current_products: list[str]
-    spending_pattern: dict
+    trans_list: list[Transaction]
 
 
-class ProductRecommendation(BaseModel):
-    product_id: str
-    product_name: str
+class Product(BaseModel):
+    id: str
     product_type: str
-    score: float
-    reason: str
+    institution: str
+    name: str
+    description: str
 
 
 class RecommendResponse(BaseModel):
-    user_id: str
-    recommendations: list[ProductRecommendation]
+    ai_comment: str
+    products: list[Product]
