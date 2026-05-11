@@ -69,7 +69,6 @@ class PortfolioRequest(PortfolioGoalBase):
 
 
 class PortfolioResponse(BaseModel):
-    user_id: str
     annual_return_rate: float
     portfolio_composition: PortfolioComposition
 
@@ -81,7 +80,6 @@ class SeedMoneyRequest(PortfolioGoalBase):
 
 
 class SeedMoneyResponse(BaseModel):
-    user_id: str
     target_amount: float
     required_monthly_savings: float  # 월 필요 저축액 (원)
 
@@ -109,7 +107,6 @@ class WeddingBudget(BaseModel):
 
 
 class WeddingResponse(BaseModel):
-    user_id: str
     budget: WeddingBudget
 
 
@@ -137,7 +134,6 @@ class TravelBudget(BaseModel):
 
 
 class TravelResponse(BaseModel):
-    user_id: str
     budget: TravelBudget
 
 
@@ -154,6 +150,5 @@ class PurchaseCandidate(BaseModel):
 
 
 class PurchaseResponse(BaseModel):
-    user_id: str
     item_name: str
     candidates: list[PurchaseCandidate]

@@ -11,7 +11,6 @@ async def build_wedding(request: WeddingRequest) -> WeddingResponse:
     honeymoon = _HONEYMOON[request.honeymoon_scale]
     sdrme = _SDRME[request.sdrme_scale]
     return WeddingResponse(
-        user_id=request.user_id,
         budget=WeddingBudget(
             venue=venue,
             honeymoon=honeymoon,
