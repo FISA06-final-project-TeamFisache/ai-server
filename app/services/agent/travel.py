@@ -17,7 +17,6 @@ async def build_travel(request: TravelRequest) -> TravelResponse:
     sightseeing = rates["sightseeing"] * days
     flight = _FLIGHT[request.travel_style]
     return TravelResponse(
-        user_id=request.user_id,
         budget=TravelBudget(
             accommodation=accommodation,
             flight=flight,

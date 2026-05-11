@@ -5,7 +5,6 @@ async def build_purchase(request: PurchaseRequest) -> PurchaseResponse:
     # TODO: LangGraph 연동 (실시간 쇼핑몰 시세 조회)
     item = request.item_name
     return PurchaseResponse(
-        user_id=request.user_id,
         item_name=item,
         candidates=[
             PurchaseCandidate(product_name=f"[STUB] {item} 기본형", estimated_price=500_000, description="가성비 모델"),
