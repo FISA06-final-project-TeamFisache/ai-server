@@ -7,7 +7,7 @@ async def rebalance_salary(request: RebalanceRequest) -> RebalanceResponse:
         RebalanceAllocation(
             category=item.category,
             amount=item.amount,
-            change=0.0,
+            change=0,
             reason="[STUB] 현재 배분 유지",
         )
         for item in request.current_allocations

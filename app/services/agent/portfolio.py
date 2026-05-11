@@ -6,8 +6,8 @@ async def build_portfolio(request: PortfolioRequest) -> PortfolioResponse:
     return PortfolioResponse(
         annual_return_rate=5.0,
         portfolio_composition=PortfolioComposition(
-            cash_pct=30.0,
-            stocks_etf_pct=50.0,
-            bonds_pct=20.0,
+            cash_pct=30,
+            stocks_etf_pct=50,
+            bonds_pct=20,
         ),
     )
