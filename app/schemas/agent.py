@@ -1,35 +1,10 @@
+from datetime import date
 from enum import Enum
 
 from pydantic import BaseModel
 
 
-# ── Rebalance / Report ──────────────────────────────────────────────────────
-
-class AllocationItem(BaseModel):
-    category: str
-    amount: int
-
-
-class RebalanceRequest(BaseModel):
-    user_id: str
-    monthly_salary: int
-    current_allocations: list[AllocationItem]
-    financial_goals: list[str]
-
-
-class RebalanceAllocation(BaseModel):
-    category: str
-    amount: int
-    change: int
-    reason: str
-
-
-class RebalanceResponse(BaseModel):
-    user_id: str
-    recommended_allocations: list[RebalanceAllocation]
-    summary: str
-
-
+# ── Report ──────────────────────────────────────────────────────
 class PortfolioComposition(BaseModel):
     cash_pct: int
     stocks_etf_pct: int
@@ -68,38 +43,35 @@ class ReportResponse(BaseModel):
     recommendation_comment: str
 
 
-# ── 목표 포트폴리오 Agent 공통 ──────────────────────────────────────────────
+# ── /agent/goal/portfolio ────────────────────────────────────────────────────
 
-
-class PortfolioGoalBase(BaseModel):
+class PortfolioRequest(BaseModel):
     user_id: str
-    duration_months: int    # 달성 기간 (개월)
-    initial_capital: int  # 초기 자본금 (원)
-
-
-# ── /agent/portfolio ────────────────────────────────────────────────────────
-
-class PortfolioRequest(PortfolioGoalBase):
-    target_amount: int  # 사용자가 확정한 총 비용 (원)
+    deadline: date
+    initial_capital: int
+    monthly_seed: int
+    target_amount: int
 
 
 class PortfolioResponse(BaseModel):
-    annual_return_rate: float
+    portfolio_detail: str
     portfolio_composition: PortfolioComposition
 
 
-# ── 종잣돈 Agent ────────────────────────────────────────────────────────────
+# ── /agent/goal/seed-money ──────────────────────────────────────────────────
 
-class SeedMoneyRequest(PortfolioGoalBase):
-    target_amount: int  # 목표 금액 (원)
+class SeedMoneyRequest(BaseModel):
+    user_id: str
+    deadline: date
+    target_amount: int
+    PorTI: str
 
 
 class SeedMoneyResponse(BaseModel):
-    target_amount: int
-    required_monthly_savings: int  # 월 필요 저축액 (원)
+    pass
 
 
-# ── 결혼 Agent ──────────────────────────────────────────────────────────────
+# ── /agent/goal/wedding ─────────────────────────────────────────────────────
 
 class WeddingScale(str, Enum):
     small = "small"
@@ -107,17 +79,19 @@ class WeddingScale(str, Enum):
     large = "large"
 
 
-class WeddingRequest(PortfolioGoalBase):
-    wedding_region: str          # 예식 지역
-    wedding_month: int           # 예식 시기 (1–12월)
+class WeddingRequest(BaseModel):
+    user_id: str
+    deadline: date
+    wedding_region: str
+    wedding_month: int
     honeymoon_scale: WeddingScale
-    sdrme_scale: WeddingScale    # 스드메 규모
+    sdrme_scale: WeddingScale
 
 
 class WeddingBudget(BaseModel):
-    venue: int       # 예식장
-    honeymoon: int   # 신혼여행
-    sdrme: int       # 스드메
+    venue: int
+    honeymoon: int
+    sdrme: int
     total: int
 
 
@@ -125,26 +99,29 @@ class WeddingResponse(BaseModel):
     budget: WeddingBudget
 
 
-# ── 해외여행 Agent ──────────────────────────────────────────────────────────
+# ── /agent/goal/travel ──────────────────────────────────────────────────────
 
 class TravelStyle(str, Enum):
-    budget = "budget"   # 가성비
-    luxury = "luxury"   # 럭셔리
+    budget = "budget"
+    luxury = "luxury"
 
 
-class TravelRequest(PortfolioGoalBase):
-    destination: str          # 여행 나라
+class TravelRequest(BaseModel):
+    user_id: str
+    deadline: date
+    maximum_budget: int
+    destination: str
     travel_style: TravelStyle
-    travel_days: int          # 여행 기간 (일)
-    departure_month: str      # 출발 예정 시기 (예: "2025-08")
+    travel_days: int
+    departure_month: str
 
 
 class TravelBudget(BaseModel):
-    accommodation: int   # 숙박
-    flight: int          # 항공권
-    food: int            # 식비
-    transportation: int  # 교통
-    sightseeing: int     # 관광
+    accommodation: int
+    flight: int
+    food: int
+    transportation: int
+    sightseeing: int
     total: int
 
 
@@ -152,10 +129,12 @@ class TravelResponse(BaseModel):
     budget: TravelBudget
 
 
-# ── 물건 사기 Agent ─────────────────────────────────────────────────────────
+# ── /agent/goal/purchase ────────────────────────────────────────────────────
 
-class PurchaseRequest(PortfolioGoalBase):
-    item_name: str  # 물건명
+class PurchaseRequest(BaseModel):
+    user_id: str
+    deadline: date
+    item_name: str
 
 
 class PurchaseCandidate(BaseModel):
@@ -167,3 +146,21 @@ class PurchaseCandidate(BaseModel):
 class PurchaseResponse(BaseModel):
     item_name: str
     candidates: list[PurchaseCandidate]
+
+
+# ── /agent/goal/analysis ────────────────────────────────────────────────────
+
+class UserPortfolio(BaseModel):
+    cash_ratio: int
+    stock_ratio: int
+    bond_ratio: int
+
+
+class AnalysisRequest(BaseModel):
+    user_id: str
+    portfolio_user: UserPortfolio
+
+
+class AnalysisResponse(BaseModel):
+    analysis_report: str
+    summary: str
