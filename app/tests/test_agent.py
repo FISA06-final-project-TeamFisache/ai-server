@@ -12,18 +12,19 @@ def client():
             yield c
 
 
-def test_portfolio_stub(client):
+def test_goal_portfolio_stub(client):
     payload = {
         "user_id": "user_001",
-        "goal": "1년 안에 3000만원",
-        "current_assets": {"cash": 5000000, "stocks": 0, "funds": 0},
-        "risk_tolerance": "moderate",
+        "deadline": "2026-12-31",
+        "initial_capital": 5000000,
+        "monthly_seed": 500000,
+        "target_amount": 30000000,
     }
-    response = client.post("/agent/portfolio", json=payload)
-    assert response.status_code == 200
+    response = client.post("/agent/goal/portfolio", json=payload)
+    assert response.status_code == 201
     data = response.json()
-    assert data["user_id"] == "user_001"
-    assert len(data["recommended_portfolio"]) > 0
+    assert "portfolio_detail" in data
+    assert "portfolio_composition" in data
 
 
 def test_rebalance_stub(client):
