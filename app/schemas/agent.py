@@ -97,6 +97,7 @@ class WeddingBudget(BaseModel):
 
 class WeddingResponse(BaseModel):
     budget: WeddingBudget
+    reasoning: str
 
 
 # ── /agent/goal/travel ──────────────────────────────────────────────────────
