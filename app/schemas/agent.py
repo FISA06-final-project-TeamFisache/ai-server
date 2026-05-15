@@ -1,5 +1,6 @@
 from datetime import date
 from enum import Enum
+from uuid import UUID
 
 from pydantic import BaseModel
 
@@ -11,24 +12,21 @@ class PortfolioComposition(BaseModel):
     bonds_pct: int
 
 
-class PortfolioChangeRate(BaseModel):
-    stock_rate: float
-    bond_rate: float
-    cash_rate: float
-
-
-class ExistingPortfolioRatio(BaseModel):
-    stock_ratio: int
-    bond_ratio: int
-    cash_ratio: int
-
-
 class ReportRequest(BaseModel):
-    user_id: str
-    total_assets: int
-    asset_change_prev_month: int
-    portfolio_change_rate: PortfolioChangeRate
-    existing_portfolio_ratio: ExistingPortfolioRatio
+    user_id: UUID
+    year: int
+    month: int
+
+
+class Portfolios(BaseModel):
+    stock_change: float
+    bond_change: float
+    cash_change: float
+
+
+class ExpenseCategory(BaseModel):
+    category: str
+    value: int
 
 
 class RecommendedRebalanceRatio(BaseModel):
@@ -38,9 +36,13 @@ class RecommendedRebalanceRatio(BaseModel):
 
 
 class ReportResponse(BaseModel):
-    portfolio_report: str
+    monthly_change: str
+    portfolios: Portfolios
+    portfolio_comment: str
+    expense_categories: list[ExpenseCategory]
+    expense_analysis: str
     recommended_rebalance_ratio: RecommendedRebalanceRatio
-    recommendation_comment: str
+    next_month_guideline: str
 
 
 # ── /agent/goal/portfolio ────────────────────────────────────────────────────
