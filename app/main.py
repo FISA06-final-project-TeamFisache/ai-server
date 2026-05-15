@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -5,13 +6,21 @@ from fastapi import FastAPI
 from app.core.exceptions import register_exception_handlers
 from app.routers.agent import router as agent_router
 from app.routers.ml import router as ml_router
+from app.services.kafka.consumer import transaction_consumer
+from app.services.kafka.producer import alert_producer
 from app.services.ml.model_loader import load_all_models
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     load_all_models()
+    await alert_producer.start()
+    await transaction_consumer.start()
+    consumer_task = asyncio.create_task(transaction_consumer.consume())
     yield
+    consumer_task.cancel()
+    await transaction_consumer.stop()
+    await alert_producer.stop()
 
 
 app = FastAPI(
