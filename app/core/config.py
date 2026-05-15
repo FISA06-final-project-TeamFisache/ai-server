@@ -25,5 +25,13 @@ class Settings(BaseSettings):
 
     internal_api_key: str = ""
 
+    # Kafka
+    kafka_bootstrap_servers: str = ""
+    kafka_input_topic: str = ""
+    kafka_output_topic: str = ""
+    kafka_consumer_group_id: str = ""
+    kafka_anomaly_window_seconds: int = 600  # 10분
+    kafka_anomaly_max_count: int = 5  # 10분 내 5건 초과 시 이상 탐지
+
 
 settings = Settings()
