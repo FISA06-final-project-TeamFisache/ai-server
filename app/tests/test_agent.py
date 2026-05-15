@@ -45,20 +45,17 @@ def test_rebalance_stub(client):
 
 def test_report_stub(client):
     payload = {
-        "user_id": "user_001",
-        "year_month": "2024-01",
-        "transactions": [
-            {
-                "transaction_id": "t1",
-                "amount": 50000,
-                "category": "식비",
-                "timestamp": "2024-01-10T12:00:00Z",
-            }
-        ],
-        "portfolio_snapshot": {},
+        "user_id": "00000000-0000-0000-0000-000000000001",
+        "year": 2024,
+        "month": 1,
     }
     response = client.post("/agent/report", json=payload)
     assert response.status_code == 200
     data = response.json()
-    assert data["user_id"] == "user_001"
-    assert data["year_month"] == "2024-01"
+    assert "monthly_change" in data
+    assert "portfolios" in data
+    assert "portfolio_comment" in data
+    assert "expense_categories" in data
+    assert "expense_analysis" in data
+    assert "recommended_rebalance_ratio" in data
+    assert "next_month_guideline" in data
