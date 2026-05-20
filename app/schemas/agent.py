@@ -13,44 +13,37 @@ class AuditLog(BaseModel):
 
 
 # ── /agent/portfolio/profile ──────────────────────────────────────────────────
-class UserPreference(BaseModel):
-    finance_type: str
-    comment: str
-
-
-class AnalysisResult(BaseModel):
-    expense_comment: str
-    invest_comment: str
-    savings_comment: str
-
-
 class ProfileRequest(BaseModel):
     user_id: UUID
 
 
 class ProfileResponse(BaseModel):
     created_at: datetime
-    user_preference: UserPreference
-    analysis_result: AnalysisResult
+    porti_comment: str
+    expense_comment: str
+    invest_comment: str
+    savings_comment: str
     audit_log: AuditLog
 
 
 # ── /agent/portfolio/recommend & /agent/event/input ───────────────────────────
 class SalaryRebalanceItem(BaseModel):
+    asset_number: str
     category: str
     ratio: int
 
 
 class PortfolioRecommendResult(BaseModel):
     stock_ratio: int
+    stock_recs: list[str]
     bond_ratio: int
+    bond_recs: list[str]
     cash_ratio: int
+    cash_recs: list[str]
 
 
 class RecommendRequest(BaseModel):
     user_id: UUID
-    user_preference: str
-    analysis_result: str
 
 
 class RecommendResponse(BaseModel):

@@ -16,14 +16,17 @@ async def recommend_portfolio(request: RecommendRequest) -> RecommendResponse:
     return RecommendResponse(
         created_at=now,
         salary_rebalance=[
-            SalaryRebalanceItem(category="저축", ratio=30),
-            SalaryRebalanceItem(category="투자", ratio=40),
-            SalaryRebalanceItem(category="생활비", ratio=30),
+            SalaryRebalanceItem(asset_number="123456-78-9012345", category="저축", ratio=30),
+            SalaryRebalanceItem(asset_number="234567-89-0123456", category="투자", ratio=40),
+            SalaryRebalanceItem(asset_number="345678-90-1234567", category="생활비", ratio=30),
         ],
         portfolio_recommend=PortfolioRecommendResult(
             stock_ratio=50,
+            stock_recs=["[STUB] 삼성전자", "[STUB] SK하이닉스"],
             bond_ratio=30,
+            bond_recs=["[STUB] 국고채 3년"],
             cash_ratio=20,
+            cash_recs=["[STUB] MMF"],
         ),
         audit_log=AuditLog(
             log_id=str(uuid4()),
