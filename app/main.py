@@ -4,8 +4,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.core.exceptions import register_exception_handlers
-from app.routers.agent import router as agent_router
-from app.routers.ml import router as ml_router
+from app.routers.event import router as event_router
+from app.routers.portfolio import router as portfolio_router
+from app.routers.report import router as report_router
 from app.services.kafka.consumer import transaction_consumer
 from app.services.kafka.producer import alert_producer
 from app.services.ml.model_loader import load_all_models
@@ -31,8 +32,9 @@ app = FastAPI(
 )
 
 register_exception_handlers(app)
-app.include_router(agent_router)
-app.include_router(ml_router)
+app.include_router(event_router)
+app.include_router(portfolio_router)
+app.include_router(report_router)
 
 
 @app.get("/health")
