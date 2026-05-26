@@ -41,6 +41,9 @@ class EventRebalanceRequest(BaseModel):
 
 class EventRebalanceResponse(BaseModel):
     created_at: datetime
+    title: str
+    target_amount: str
+    deadline: datetime
     salary_rebalance: list[SalaryRebalanceItem]
     rebalance_comment: str
 
@@ -49,6 +52,9 @@ class EventRebalanceResponse(BaseModel):
 class EventAssetPortfolioRequest(BaseModel):
     user_id: UUID
     user_input: str
+    title: str
+    target_amount: str
+    deadline: datetime
     invest_amount: int
     porti_type: str
     porti_comment: str
