@@ -14,10 +14,12 @@ async def asset_portfolio_event(request: EventAssetPortfolioRequest) -> EventAss
     now = datetime.now(timezone.utc)
     return EventAssetPortfolioResponse(
         created_at=now,
-        investment_plans=[
+        investment_flows=[
             InvestmentPlan(
+                title="[STUB] 목표 달성 투자 플랜",
+                priority=1,
                 funding_sources=[
-                    FundingSource(account_name="[STUB] 입출금 계좌", amount=request.invest_amount),
+                    FundingSource(asset_number="[STUB] 입출금 계좌", amount=request.invest_amount),
                 ],
                 gathering_account="[STUB] 목표 모음 통장",
                 portfolio=[

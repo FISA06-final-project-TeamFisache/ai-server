@@ -8,13 +8,11 @@ async def rebalance_event(request: EventRebalanceRequest) -> EventRebalanceRespo
     now = datetime.now(timezone.utc)
     return EventRebalanceResponse(
         created_at=now,
-        title="[STUB] 유럽 여행 자금 마련",
-        target_amount="10,000,000",
-        deadline=datetime(2026, 12, 31, tzinfo=timezone.utc),
+        invest_amount=500000,
         salary_rebalance=[
-            SalaryRebalanceItem(asset_number="123456-78-9012345", category="생활비", ratio=40),
-            SalaryRebalanceItem(asset_number="234567-89-0123456", category="비상금", ratio=20),
-            SalaryRebalanceItem(asset_number="345678-90-1234567", category="목표저축", ratio=40),
+            SalaryRebalanceItem(asset_number="123456-78-9012345", category="생활비", amount=400000),
+            SalaryRebalanceItem(asset_number="234567-89-0123456", category="비상금", amount=200000),
+            SalaryRebalanceItem(asset_number="345678-90-1234567", category="목표저축", amount=400000),
         ],
         rebalance_comment="[STUB] 이벤트 목표에 따른 자산 재설계 결과입니다.",
     )

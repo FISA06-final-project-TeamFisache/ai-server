@@ -9,8 +9,10 @@ async def generate_report(request: ReportRequest) -> ReportResponse:
     return ReportResponse(
         created_at=now,
         trend_comment="[STUB] 전월 대비 자산 변화 추이 코멘트가 여기에 표시됩니다.",
+        event_comment="[STUB] 목표 도달율 관련 코멘트가 여기에 표시됩니다.",
         market_condition="[STUB] 현재 시장 상황 텍스트가 여기에 표시됩니다.",
         hover_description="[STUB] 소비 패턴에 대한 설명이 여기에 표시됩니다.",
+        guideline="[STUB] 다음 달 소비 가이드라인이 여기에 표시됩니다.",
         performance_status="OUTPERFORM",
         performance_comment="[STUB] 성과 관련 코멘트가 여기에 표시됩니다.",
     )
