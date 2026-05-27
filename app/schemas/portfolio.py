@@ -12,6 +12,7 @@ class CategoryExpenseItem(BaseModel):
 
 class AssetItem(BaseModel):
     asset_type: str
+    asset_number: str
     balance: str
 
 
@@ -45,7 +46,7 @@ class RebalanceRequest(BaseModel):
 class SalaryRebalanceItem(BaseModel):
     asset_number: str
     category: str
-    ratio: int
+    amount: int
 
 
 class RebalanceResponse(BaseModel):
@@ -57,6 +58,7 @@ class RebalanceResponse(BaseModel):
 # ── POST /portfolio/asset-portfolio ──────────────────────────────────────────
 class InvestAssetItem(BaseModel):
     asset_type: str
+    asset_number: str
     balance: int
 
 
@@ -78,7 +80,7 @@ class AssetPortfolioRequest(BaseModel):
 
 
 class FundingSource(BaseModel):
-    account_name: str
+    asset_number: str
     amount: int
 
 
@@ -88,6 +90,8 @@ class PortfolioItem(BaseModel):
 
 
 class InvestmentPlan(BaseModel):
+    title: str
+    priority: int
     funding_sources: list[FundingSource]
     gathering_account: str
     portfolio: list[PortfolioItem]
@@ -96,4 +100,4 @@ class InvestmentPlan(BaseModel):
 
 class AssetPortfolioResponse(BaseModel):
     created_at: datetime
-    investment_plans: list[InvestmentPlan]
+    investment_flows: list[InvestmentPlan]

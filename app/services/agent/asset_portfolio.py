@@ -14,10 +14,12 @@ async def recommend_asset_portfolio(request: AssetPortfolioRequest) -> AssetPort
     now = datetime.now(timezone.utc)
     return AssetPortfolioResponse(
         created_at=now,
-        investment_plans=[
+        investment_flows=[
             InvestmentPlan(
+                title="[STUB] 분산 투자 플랜",
+                priority=1,
                 funding_sources=[
-                    FundingSource(account_name="[STUB] 입출금 계좌", amount=request.invest_amount),
+                    FundingSource(asset_number="[STUB] 입출금 계좌", amount=request.invest_amount),
                 ],
                 gathering_account="[STUB] 모을 통장",
                 portfolio=[
