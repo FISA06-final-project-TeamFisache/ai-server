@@ -56,7 +56,7 @@ class EventInputRequest(BaseModel):
 class EventInputResponse(BaseModel):
     created_at: datetime
     title: str
-    target_amount: str
+    target_amount: int
     deadline: datetime
 
 
@@ -70,7 +70,7 @@ class RebalanceInfo(BaseModel):
 class EventRebalanceRequest(BaseModel):
     user_id: UUID
     title: str
-    target_amount: str
+    target_amount: int
     deadline: datetime
     porti_type: str
     porti_comment: str
@@ -88,7 +88,7 @@ class EventRebalanceResponse(BaseModel):
 class EventAssetPortfolioRequest(BaseModel):
     user_id: UUID
     title: str
-    target_amount: str
+    target_amount: int
     deadline: datetime
     invest_amount: int
     porti_type: str

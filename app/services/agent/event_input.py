@@ -9,6 +9,6 @@ async def analyze_event_input(request: EventInputRequest) -> EventInputResponse:
     return EventInputResponse(
         created_at=now,
         title="[STUB] 유럽 여행 자금 마련",
-        target_amount="10,000,000",
+        target_amount="10_000_000",
         deadline=datetime(2026, 12, 31, tzinfo=timezone.utc),
     )

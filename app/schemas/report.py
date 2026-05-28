@@ -15,7 +15,7 @@ class TransactionLog(BaseModel):
     amount: int
     category: str
     sender_name: str
-    transaction_at: str
+    transaction_at: datetime
 
 
 class HoverDescription(BaseModel):
@@ -29,7 +29,7 @@ class ReportRequest(BaseModel):
     month: int
     title: str
     deadline: datetime
-    target_amount: str
+    target_amount: int
     asset_snapshots: list[AssetSnapshot]
     transaction_log: list[TransactionLog]
 
