@@ -4,20 +4,11 @@ from uuid import UUID
 from pydantic import BaseModel
 
 
-class PortfolioDetailItem(BaseModel):
-    item_name: str
-    item_amount: int
-
-
-class PortfolioDetail(BaseModel):
-    asset_type: str
-    asset_amount: int
-    items: list[PortfolioDetailItem]
-
-
-class PortfolioSnapshot(BaseModel):
-    total_asset_amount: int
-    portfolio_details: list[PortfolioDetail]
+class AssetSnapshot(BaseModel):
+    snapshot_at: datetime
+    total_amount: int
+    savings_amount: int
+    invest_amount: int
 
 
 class TransactionLog(BaseModel):
@@ -35,8 +26,7 @@ class ReportRequest(BaseModel):
     title: str
     deadline: datetime
     target_amount: str
-    prev_month_portfolio: PortfolioSnapshot
-    now_portfolio: PortfolioSnapshot
+    asset_snapshots: list[AssetSnapshot]
     transaction_log: list[TransactionLog]
 
 

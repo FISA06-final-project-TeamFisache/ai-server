@@ -91,7 +91,8 @@ class PortfolioItem(BaseModel):
 
 class InvestmentPlan(BaseModel):
     title: str
-    priority: int
+    term: str
+    summary: str
     funding_sources: list[FundingSource]
     gathering_account: str
     portfolio: list[PortfolioItem]
