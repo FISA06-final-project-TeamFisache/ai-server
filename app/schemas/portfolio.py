@@ -14,7 +14,7 @@ class AssetItem(BaseModel):
     asset_type: str
     account_name: str
     asset_id: UUID
-    balance: str
+    balance: int
 
 
 # ── POST /portfolio/profile ───────────────────────────────────────────────────
