@@ -6,14 +6,16 @@ from pydantic import BaseModel
 
 # ── Shared sub-models ─────────────────────────────────────────────────────────
 class SalaryRebalanceItem(BaseModel):
-    asset_number: str
+    account_name: str
+    asset_id: UUID
     category: str
     amount: int
 
 
 class InvestAssetItem(BaseModel):
     asset_type: str
-    asset_number: str
+    account_name: str
+    asset_id: UUID
     balance: int
 
 
@@ -26,7 +28,8 @@ class ProductItem(BaseModel):
 
 
 class FundingSource(BaseModel):
-    asset_number: str
+    account_name: str
+    asset_id: UUID
     amount: int
 
 
@@ -37,11 +40,11 @@ class PortfolioItem(BaseModel):
 
 class InvestmentPlan(BaseModel):
     title: str
-    priority: int
+    term: str
+    summary: str
     funding_sources: list[FundingSource]
-    gathering_account: str
+    gathering_account: UUID
     portfolio: list[PortfolioItem]
-    description: str
 
 
 # ── POST /event/input ─────────────────────────────────────────────────────────
@@ -53,7 +56,7 @@ class EventInputRequest(BaseModel):
 class EventInputResponse(BaseModel):
     created_at: datetime
     title: str
-    target_amount: str
+    target_amount: int
     deadline: datetime
 
 
@@ -67,7 +70,7 @@ class RebalanceInfo(BaseModel):
 class EventRebalanceRequest(BaseModel):
     user_id: UUID
     title: str
-    target_amount: str
+    target_amount: int
     deadline: datetime
     porti_type: str
     porti_comment: str
@@ -85,7 +88,7 @@ class EventRebalanceResponse(BaseModel):
 class EventAssetPortfolioRequest(BaseModel):
     user_id: UUID
     title: str
-    target_amount: str
+    target_amount: int
     deadline: datetime
     invest_amount: int
     porti_type: str

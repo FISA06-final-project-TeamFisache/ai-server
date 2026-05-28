@@ -17,17 +17,17 @@ async def asset_portfolio_event(request: EventAssetPortfolioRequest) -> EventAss
         investment_flows=[
             InvestmentPlan(
                 title="[STUB] 목표 달성 투자 플랜",
-                priority=1,
+                term="장기",
+                summary="장기적인 목표를 달성하기 위해 플랜을 짜봤어요",
                 funding_sources=[
-                    FundingSource(asset_number="[STUB] 입출금 계좌", amount=request.invest_amount),
+                    FundingSource(account_name="[STUB] 입출금 계좌", asset_id=request.investment_flows[0].funding_sources[0].asset_id, amount=request.invest_amount),
                 ],
-                gathering_account="[STUB] 목표 모음 통장",
+                gathering_account=request.investment_flows[0].gathering_account,
                 portfolio=[
                     PortfolioItem(name="[STUB] 국내주식 ETF", ratio=50),
                     PortfolioItem(name="[STUB] 채권형 펀드", ratio=30),
                     PortfolioItem(name="[STUB] 정기예금", ratio=20),
                 ],
-                description="[STUB] 이벤트 목표에 따른 포트폴리오 재구성 결과입니다.",
             )
         ],
     )

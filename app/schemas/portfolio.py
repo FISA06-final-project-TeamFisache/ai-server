@@ -12,8 +12,9 @@ class CategoryExpenseItem(BaseModel):
 
 class AssetItem(BaseModel):
     asset_type: str
-    asset_number: str
-    balance: str
+    account_name: str
+    asset_id: UUID
+    balance: int
 
 
 # ── POST /portfolio/profile ───────────────────────────────────────────────────
@@ -44,7 +45,7 @@ class RebalanceRequest(BaseModel):
 
 
 class SalaryRebalanceItem(BaseModel):
-    asset_number: str
+    asset_id: UUID
     category: str
     amount: int
 
@@ -56,11 +57,6 @@ class RebalanceResponse(BaseModel):
 
 
 # ── POST /portfolio/asset-portfolio ──────────────────────────────────────────
-class InvestAssetItem(BaseModel):
-    asset_type: str
-    asset_number: str
-    balance: int
-
 
 class ProductItem(BaseModel):
     product_type: str
@@ -75,12 +71,12 @@ class AssetPortfolioRequest(BaseModel):
     invest_amount: int
     porti_type: str
     porti_comment: str
-    invest_assets: list[InvestAssetItem]
+    invest_assets: list[AssetItem]
     products: list[ProductItem]
 
 
 class FundingSource(BaseModel):
-    asset_number: str
+    asset_id: UUID
     amount: int
 
 
@@ -91,11 +87,11 @@ class PortfolioItem(BaseModel):
 
 class InvestmentPlan(BaseModel):
     title: str
-    priority: int
+    term: str
+    summary: str
     funding_sources: list[FundingSource]
-    gathering_account: str
+    gathering_account: UUID
     portfolio: list[PortfolioItem]
-    description: str
 
 
 class AssetPortfolioResponse(BaseModel):

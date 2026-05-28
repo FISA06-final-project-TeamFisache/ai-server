@@ -7,6 +7,7 @@ from app.core.exceptions import register_exception_handlers
 from app.routers.event import router as event_router
 from app.routers.portfolio import router as portfolio_router
 from app.routers.report import router as report_router
+from app.routers.salary import router as salary_router
 from app.services.kafka.consumer import transaction_consumer
 from app.services.kafka.producer import alert_producer
 from app.services.ml.model_loader import load_all_models
@@ -35,6 +36,7 @@ register_exception_handlers(app)
 app.include_router(event_router)
 app.include_router(portfolio_router)
 app.include_router(report_router)
+app.include_router(salary_router)
 
 
 @app.get("/health")
