@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.core.exceptions import register_exception_handlers
+from app.db.connection import close_pool
 from app.routers.event import router as event_router
 from app.routers.portfolio import router as portfolio_router
 from app.routers.report import router as report_router
@@ -23,6 +24,7 @@ async def lifespan(app: FastAPI):
     consumer_task.cancel()
     await transaction_consumer.stop()
     await alert_producer.stop()
+    await close_pool()
 
 
 app = FastAPI(
