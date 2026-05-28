@@ -17,17 +17,17 @@ async def recommend_asset_portfolio(request: AssetPortfolioRequest) -> AssetPort
         investment_flows=[
             InvestmentPlan(
                 title="[STUB] 분산 투자 플랜",
-                priority=1,
+                term="중기",
+                summary="중기적이고 안정적으로 자금을 모을 수 있어요",
                 funding_sources=[
-                    FundingSource(asset_number="[STUB] 입출금 계좌", amount=request.invest_amount),
+                    FundingSource(account_name="[STUB] 입출금 계좌", asset_id=request.invest_assets[0].asset_id, amount=request.invest_amount),
                 ],
-                gathering_account="[STUB] 모을 통장",
+                gathering_account=request.invest_assets[0].asset_id,
                 portfolio=[
                     PortfolioItem(name="[STUB] 국내주식 ETF", ratio=50),
                     PortfolioItem(name="[STUB] 채권형 펀드", ratio=30),
                     PortfolioItem(name="[STUB] 정기예금", ratio=20),
                 ],
-                description="[STUB] 안정적인 수익을 위한 분산 투자 포트폴리오입니다.",
             )
         ],
     )

@@ -10,8 +10,8 @@ async def rebalance_salary(request: RebalanceRequest) -> RebalanceResponse:
         created_at=now,
         invest_amount=500000,
         salary_rebalance=[
-            SalaryRebalanceItem(asset_number="123456-78-9012345", category="저축", amount=300000),
-            SalaryRebalanceItem(asset_number="234567-89-0123456", category="생활비", amount=400000),
-            SalaryRebalanceItem(asset_number="345678-90-1234567", category="비상금", amount=300000),
+            SalaryRebalanceItem(account_name="우리 WON 생활통장", asset_id=request.assets[0].asset_id, category="생활비", amount=400000),
+            SalaryRebalanceItem(account_name="하나 파킹통장", asset_id=request.assets[0].asset_id, category="비상금", amount=200000),
+            SalaryRebalanceItem(account_name="KB 이벤트통장", asset_id=request.assets[0].asset_id, category="목표저축", amount=400000),
         ],
     )

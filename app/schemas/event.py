@@ -6,14 +6,16 @@ from pydantic import BaseModel
 
 # ── Shared sub-models ─────────────────────────────────────────────────────────
 class SalaryRebalanceItem(BaseModel):
-    asset_number: str
+    account_name: str
+    asset_id: UUID
     category: str
     amount: int
 
 
 class InvestAssetItem(BaseModel):
     asset_type: str
-    asset_number: str
+    account_name: str
+    asset_id: UUID
     balance: int
 
 
@@ -26,7 +28,8 @@ class ProductItem(BaseModel):
 
 
 class FundingSource(BaseModel):
-    asset_number: str
+    account_name: str
+    asset_id: UUID
     amount: int
 
 
@@ -40,9 +43,8 @@ class InvestmentPlan(BaseModel):
     term: str
     summary: str
     funding_sources: list[FundingSource]
-    gathering_account: str
+    gathering_account: UUID
     portfolio: list[PortfolioItem]
-    description: str
 
 
 # ── POST /event/input ─────────────────────────────────────────────────────────

@@ -12,11 +12,15 @@ class AssetSnapshot(BaseModel):
 
 
 class TransactionLog(BaseModel):
-    asset_number: str
     amount: int
     category: str
     sender_name: str
-    transactionAt: str
+    transaction_at: str
+
+
+class HoverDescription(BaseModel):
+    category: str
+    content: str
 
 
 class ReportRequest(BaseModel):
@@ -35,7 +39,7 @@ class ReportResponse(BaseModel):
     trend_comment: str
     event_comment: str
     market_condition: str
-    hover_description: str
+    hover_description: list[HoverDescription]
     guideline: str
     performance_status: str
     performance_comment: str
