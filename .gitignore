@@ -10,3 +10,5 @@ dist/
 build/
 *.egg-info/
 models/*.pkl
+package-lock.json
+package.json

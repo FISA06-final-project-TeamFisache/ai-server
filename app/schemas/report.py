@@ -30,6 +30,7 @@ class ReportRequest(BaseModel):
     title: str
     deadline: datetime
     target_amount: int
+    goal_progress: int
     asset_snapshots: list[AssetSnapshot]
     transaction_log: list[TransactionLog]
 

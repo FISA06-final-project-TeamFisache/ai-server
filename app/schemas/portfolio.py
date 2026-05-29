@@ -47,7 +47,7 @@ class RebalanceRequest(BaseModel):
 class SalaryRebalanceItem(BaseModel):
     asset_id: UUID
     category: str
-    amount: int
+    ratio: int  # salary 대비 % — 백엔드가 amount = salary * ratio / 100 으로 계산
 
 
 class RebalanceResponse(BaseModel):
@@ -82,7 +82,7 @@ class FundingSource(BaseModel):
 
 class PortfolioItem(BaseModel):
     name: str
-    ratio: int
+    ratio: float
 
 
 class InvestmentPlan(BaseModel):
@@ -91,7 +91,6 @@ class InvestmentPlan(BaseModel):
     summary: str
     funding_sources: list[FundingSource]
     gathering_account: UUID
-    amount: int
     portfolio: list[PortfolioItem]
 
 
