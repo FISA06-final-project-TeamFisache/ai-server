@@ -51,9 +51,6 @@ class TransactionConsumer:
 
     async def _handle_transaction(self, transaction: KafkaTransactionMessage) -> None:
         today = date.today()
-        if today.day == 1:
-            return
-
         daily_cache.reset_if_new_day(today)
         daily_cache.accumulate(transaction.asset_number, transaction.amount, transaction.category)
 
