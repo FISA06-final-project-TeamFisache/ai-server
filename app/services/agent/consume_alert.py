@@ -9,6 +9,7 @@ from langchain_openai import ChatOpenAI
 
 from app.core.config import settings
 from app.schemas.kafka import KafkaAnomalyAlert
+from app.services.daily_cache import daily_cache
 
 logger = logging.getLogger(__name__)
 
@@ -102,8 +103,13 @@ async def process_user_alert(
     last_month_today = _same_day_last_month(today)
     last_month_start = last_month_today.replace(day=1)
 
-    db_this_total = await _fetch_cumulative(conn, asset_number, this_month_start, today)
-    last_total = await _fetch_cumulative(conn, asset_number, last_month_start, last_month_today + timedelta(days=1))
+    cached = daily_cache.get_db_cache(asset_number, today)
+    if cached:
+        db_this_total, last_total = cached
+    else:
+        db_this_total = await _fetch_cumulative(conn, asset_number, this_month_start, today)
+        last_total = await _fetch_cumulative(conn, asset_number, last_month_start, last_month_today + timedelta(days=1))
+        daily_cache.set_db_cache(asset_number, db_this_total, last_total, today)
 
     this_total = db_this_total + today_total
 

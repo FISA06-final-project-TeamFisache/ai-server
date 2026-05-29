@@ -8,22 +8,10 @@ from app.core.config import settings
 from app.db.connection import get_pool
 from app.schemas.kafka import KafkaTransactionMessage
 from app.services.agent.consume_alert import process_user_alert
+from app.services.daily_cache import daily_cache
 from app.services.kafka.producer import alert_producer
 
 logger = logging.getLogger(__name__)
-
-_alerted_today: dict[str, date] = {}
-_reference_date: date = date.today()
-_today_totals: dict[str, int] = {}
-_today_by_category: dict[str, dict[str, int]] = {}
-
-
-def _reset_if_new_day(today: date) -> None:
-    global _reference_date
-    if today != _reference_date:
-        _reference_date = today
-        _today_totals.clear()
-        _today_by_category.clear()
 
 
 class TransactionConsumer:
@@ -66,21 +54,12 @@ class TransactionConsumer:
         if today.day == 1:
             return
 
-        _reset_if_new_day(today)
+        daily_cache.reset_if_new_day(today)
+        daily_cache.accumulate(transaction.asset_number, transaction.amount, transaction.category)
 
         asset_number = transaction.asset_number
-
-        # 오늘 소비 인메모리 누적
-        _today_totals[asset_number] = _today_totals.get(asset_number, 0) + transaction.amount
-        cat_map = _today_by_category.setdefault(asset_number, {})
-        cat_map[transaction.category] = cat_map.get(transaction.category, 0) + transaction.amount
-
-        if _alerted_today.get(asset_number) == today:
+        if daily_cache.is_alerted(asset_number, today):
             return
-
-        today_by_category = dict(
-            sorted(_today_by_category[asset_number].items(), key=lambda x: -x[1])
-        )
 
         pool = await get_pool()
         async with pool.acquire() as conn:
@@ -88,12 +67,12 @@ class TransactionConsumer:
                 conn,
                 asset_number,
                 today,
-                _today_totals[asset_number],
-                today_by_category,
+                daily_cache.get_today_total(asset_number),
+                daily_cache.get_today_by_category(asset_number),
             )
 
         if alert:
-            _alerted_today[asset_number] = today
+            daily_cache.mark_alerted(asset_number, today)
             await alert_producer.send_alert(alert)
             logger.info("소비 추세 알림 전송 (asset_number=%s)", asset_number)
 
