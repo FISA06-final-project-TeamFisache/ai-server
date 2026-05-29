@@ -7,7 +7,7 @@ class DailyCache:
         self._totals: dict[str, int] = {}
         self._by_cat: dict[str, dict[str, int]] = {}
         self._alerted: dict[str, date] = {}
-        self._db: dict[str, tuple[int, int, date]] = {}
+        self._db: dict[str, tuple[dict[str, int], dict[str, int], date]] = {}
 
     def reset_if_new_day(self, today: date) -> None:
         if today != self._ref:
@@ -32,14 +32,20 @@ class DailyCache:
     def mark_alerted(self, asset_number: str, today: date) -> None:
         self._alerted[asset_number] = today
 
-    def get_db_cache(self, asset_number: str, today: date) -> tuple[int, int] | None:
+    def get_db_cache(self, asset_number: str, today: date) -> tuple[dict[str, int], dict[str, int]] | None:
         entry = self._db.get(asset_number)
         if entry and entry[2] == today:
             return entry[0], entry[1]
         return None
 
-    def set_db_cache(self, asset_number: str, db_this_total: int, last_total: int, today: date) -> None:
-        self._db[asset_number] = (db_this_total, last_total, today)
+    def set_db_cache(
+        self,
+        asset_number: str,
+        db_this_by_cat: dict[str, int],
+        last_by_cat: dict[str, int],
+        today: date,
+    ) -> None:
+        self._db[asset_number] = (db_this_by_cat, last_by_cat, today)
 
 
 daily_cache = DailyCache()
