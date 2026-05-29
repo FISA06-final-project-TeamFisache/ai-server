@@ -64,7 +64,6 @@ class TransactionConsumer:
                 conn,
                 asset_number,
                 today,
-                daily_cache.get_today_total(asset_number),
                 daily_cache.get_today_by_category(asset_number),
             )
 
