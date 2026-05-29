@@ -91,6 +91,7 @@ class InvestmentPlan(BaseModel):
     summary: str
     funding_sources: list[FundingSource]
     gathering_account: UUID
+    amount: int
     portfolio: list[PortfolioItem]
 
 
