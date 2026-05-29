@@ -233,6 +233,7 @@ async def recommend_asset_portfolio(request: AssetPortfolioRequest) -> AssetPort
                     if f.get("gathering_account")
                     else request.invest_assets[0].asset_id
                 ),
+                amount=sum(s["amount"] for s in f["funding_sources"] if s.get("asset_id")),
                 portfolio=[
                     PortfolioItem(name=p["name"], ratio=p["ratio"])
                     for p in f["portfolio"]

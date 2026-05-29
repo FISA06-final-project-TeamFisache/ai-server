@@ -126,6 +126,7 @@ def _parse_event_portfolio(state: EventAssetPortfolioState) -> EventAssetPortfol
         "funding_sources": [{"asset_id": source_id, "amount": monthly_amount,
                               "account_name": ""}],
         "gathering_account": gathering_id,
+        "amount": monthly_amount,
         "portfolio": portfolio,
     }
 
@@ -156,6 +157,7 @@ async def asset_portfolio_event(
         {
             "title": f.title, "term": f.term, "summary": f.summary,
             "gathering_account": str(f.gathering_account),
+            "amount": f.amount,
             "funding_sources": [
                 {"asset_id": str(s.asset_id), "amount": s.amount, "account_name": s.account_name}
                 for s in f.funding_sources
@@ -228,6 +230,7 @@ async def asset_portfolio_event(
                 summary=f["summary"],
                 funding_sources=funding_sources,
                 gathering_account=gathering_id,
+                amount=f.get("amount", 0),
                 portfolio=[PortfolioItem(name=p["name"], ratio=p["ratio"]) for p in f.get("portfolio", [])],
             ))
         except Exception:

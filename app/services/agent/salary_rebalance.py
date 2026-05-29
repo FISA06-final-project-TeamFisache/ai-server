@@ -7,7 +7,7 @@ from uuid import UUID
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
 
-from app.schemas.salary import SalaryRequest, SalaryResponse, SalaryRebalanceItem
+from app.schemas.salary import SalaryRequest, SalaryResponse, PortfolioItem, FlowItem
 from app.services.agent.llm import get_llm
 
 
@@ -84,7 +84,7 @@ _graph = _build_graph()
 async def analyze_salary_rebalance(request: SalaryRequest) -> SalaryResponse:
     current_allocations = [
         {"asset_id": str(item.asset_id), "category": item.category, "amount": item.amount}
-        for item in request.salary_rebalance
+        for item in request.portfolio_items
     ]
 
     initial_state: SalaryRebalanceState = {
@@ -97,8 +97,8 @@ async def analyze_salary_rebalance(request: SalaryRequest) -> SalaryResponse:
 
     final_state: SalaryRebalanceState = await _graph.ainvoke(initial_state)
 
-    salary_rebalance = [
-        SalaryRebalanceItem(
+    portfolio_items = [
+        PortfolioItem(
             asset_id=UUID(a["asset_id"]),
             category=a["category"],
             amount=a["amount"],
@@ -106,11 +106,12 @@ async def analyze_salary_rebalance(request: SalaryRequest) -> SalaryResponse:
         for a in final_state["adjusted_allocations"]
     ]
 
-    if not salary_rebalance:
-        salary_rebalance = list(request.salary_rebalance)
+    if not portfolio_items:
+        portfolio_items = list(request.portfolio_items)
 
     return SalaryResponse(
         created_at=datetime.now(timezone.utc),
-        salary_rebalance=salary_rebalance,
+        portfolio_items=portfolio_items,
+        flow_items=request.flow_items,
         rebalance_comment=final_state["rebalance_comment"],
     )

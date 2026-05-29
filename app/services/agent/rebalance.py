@@ -2,6 +2,7 @@ import json
 import re
 from datetime import datetime, timezone
 from typing import TypedDict
+from uuid import UUID
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
@@ -145,9 +146,9 @@ async def rebalance_salary(request: RebalanceRequest) -> RebalanceResponse:
         if matched:
             used_ids.add(matched["asset_id"])
             salary_rebalance.append(SalaryRebalanceItem(
-                asset_id=matched["asset_id"],
+                asset_id=UUID(matched["asset_id"]),
                 category=category,
-                ratio=ratio,
+                amount=round(request.salary * ratio / 100),
             ))
 
     return RebalanceResponse(
