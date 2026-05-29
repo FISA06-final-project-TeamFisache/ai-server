@@ -23,6 +23,7 @@ async def recommend_asset_portfolio(request: AssetPortfolioRequest) -> AssetPort
                     FundingSource(account_name="[STUB] 입출금 계좌", asset_id=request.invest_assets[0].asset_id, amount=request.invest_amount),
                 ],
                 gathering_account=request.invest_assets[0].asset_id,
+                amount=300000,
                 portfolio=[
                     PortfolioItem(name="[STUB] 국내주식 ETF", ratio=50),
                     PortfolioItem(name="[STUB] 채권형 펀드", ratio=30),

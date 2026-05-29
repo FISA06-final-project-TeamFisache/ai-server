@@ -23,6 +23,7 @@ async def asset_portfolio_event(request: EventAssetPortfolioRequest) -> EventAss
                     FundingSource(account_name="[STUB] 입출금 계좌", asset_id=request.investment_flows[0].funding_sources[0].asset_id, amount=request.invest_amount),
                 ],
                 gathering_account=request.investment_flows[0].gathering_account,
+                amount=300000,
                 portfolio=[
                     PortfolioItem(name="[STUB] 국내주식 ETF", ratio=50),
                     PortfolioItem(name="[STUB] 채권형 펀드", ratio=30),
