@@ -1,117 +1,76 @@
 import json
 import re
 from datetime import datetime, timezone
-from typing import TypedDict
 from uuid import UUID
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langgraph.graph import END, StateGraph
 
-from app.schemas.salary import SalaryRequest, SalaryResponse, PortfolioItem, FlowItem
+from app.schemas.salary import SalaryRequest, SalaryResponse, PortfolioItem
 from app.services.agent.llm import get_llm
 
 
-class SalaryRebalanceState(TypedDict):
-    salary_diff: int
-    current_allocations: list[dict]
-    adjusted_allocations: list[dict]
-    strategy_raw: str
-    rebalance_comment: str
+def _calculate_adjusted(current: list[dict], salary_diff: int) -> list[dict]:
+    total = sum(a["amount"] for a in current) or 1
+    return [
+        {**a, "amount": max(0, round(a["amount"] + salary_diff * a["amount"] / total))}
+        for a in current
+    ]
 
 
-def _plan_adjustment(state: SalaryRebalanceState) -> SalaryRebalanceState:
+async def _generate_comment(salary_diff: int, before: list[dict], after: list[dict]) -> str:
     llm = get_llm(temperature=0.1)
+    direction = "초과" if salary_diff > 0 else "결손"
 
-    direction = "초과" if state["salary_diff"] > 0 else "결손"
-    alloc_summary = "\n".join(
-        f"  - {a['category']}: {a['amount']:,}원"
-        for a in state["current_allocations"]
+    before_map = {a["category"]: a["amount"] for a in before}
+    change_summary = "\n".join(
+        f"  - {a['category']}: {before_map.get(a['category'], 0):,}원 → {a['amount']:,}원"
+        f" ({'+' if a['amount'] - before_map.get(a['category'], 0) >= 0 else ''}"
+        f"{a['amount'] - before_map.get(a['category'], 0):,}원)"
+        for a in after
     )
 
     messages = [
         SystemMessage(content=(
-            "당신은 월급 배분 조정 전문가입니다.\n"
-            "월급 초과 또는 결손 금액을 기존 배분 비율에 맞게 조정하고 한 줄 코멘트를 작성하세요.\n\n"
+            "당신은 월급 배분 안내 전문가입니다.\n"
+            "조정 전후 배분 내역을 보고, 사용자에게 변동 내용을 친근하게 설명하는 한 줄 안내 메시지를 작성하세요.\n"
+            "실제 조정된 금액을 정확하게 반영해 안내하세요.\n"
+            "이모지나 이모티콘은 사용하지 마세요.\n\n"
             "반드시 아래 JSON만 응답하세요:\n"
-            '{"rebalance_comment":"한 줄 설명"}'
+            '{"rebalance_comment":"한 줄 안내 메시지"}'
         )),
         HumanMessage(content=(
-            f"월급 {direction}: {abs(state['salary_diff']):,}원\n"
-            f"현재 배분:\n{alloc_summary}"
+            f"월급 {direction}: {abs(salary_diff):,}원\n\n"
+            f"조정 결과:\n{change_summary}"
         )),
     ]
-    result = llm.invoke(messages)
-    return {**state, "strategy_raw": result.content.strip()}
+    result = await llm.ainvoke(messages)
 
-
-def _apply_adjustment(state: SalaryRebalanceState) -> SalaryRebalanceState:
     try:
-        match = re.search(r"\{.*\}", state["strategy_raw"], re.DOTALL)
+        match = re.search(r"\{.*\}", result.content.strip(), re.DOTALL)
         data = json.loads(match.group()) if match else {}
+        return data.get("rebalance_comment", f"월급 {direction} {abs(salary_diff):,}원을 각 항목에 맞게 조정했어요.")
     except Exception:
-        data = {}
-
-    allocations = state["current_allocations"]
-    total = sum(a["amount"] for a in allocations) or 1
-
-    adjusted = []
-    for a in allocations:
-        share = a["amount"] / total
-        new_amount = max(0, round(a["amount"] + state["salary_diff"] * share))
-        adjusted.append({**a, "amount": new_amount})
-
-    direction = "초과" if state["salary_diff"] > 0 else "결손"
-    comment = data.get(
-        "rebalance_comment",
-        f"월급 {direction} {abs(state['salary_diff']):,}원을 기존 비율에 맞게 조정했어요.",
-    )
-    return {**state, "adjusted_allocations": adjusted, "rebalance_comment": comment}
-
-
-def _build_graph() -> StateGraph:
-    graph = StateGraph(SalaryRebalanceState)
-    graph.add_node("plan", _plan_adjustment)
-    graph.add_node("apply", _apply_adjustment)
-    graph.set_entry_point("plan")
-    graph.add_edge("plan", "apply")
-    graph.add_edge("apply", END)
-    return graph.compile()
-
-
-_graph = _build_graph()
+        return f"월급 {direction} {abs(salary_diff):,}원을 각 항목에 맞게 조정했어요."
 
 
 async def analyze_salary_rebalance(request: SalaryRequest) -> SalaryResponse:
-    current_allocations = [
+    current = [
         {"asset_id": str(item.asset_id), "category": item.category, "amount": item.amount}
         for item in request.portfolio_items
     ]
 
-    initial_state: SalaryRebalanceState = {
-        "salary_diff": request.salary_diff,
-        "current_allocations": current_allocations,
-        "adjusted_allocations": [],
-        "strategy_raw": "",
-        "rebalance_comment": "",
-    }
+    # 1. 계산 먼저
+    adjusted = _calculate_adjusted(current, request.salary_diff)
 
-    final_state: SalaryRebalanceState = await _graph.ainvoke(initial_state)
-
-    portfolio_items = [
-        PortfolioItem(
-            asset_id=UUID(a["asset_id"]),
-            category=a["category"],
-            amount=a["amount"],
-        )
-        for a in final_state["adjusted_allocations"]
-    ]
-
-    if not portfolio_items:
-        portfolio_items = list(request.portfolio_items)
+    # 2. 실제 결과를 LLM에 전달해 정확한 코멘트 생성
+    comment = await _generate_comment(request.salary_diff, current, adjusted)
 
     return SalaryResponse(
         created_at=datetime.now(timezone.utc),
-        portfolio_items=portfolio_items,
+        portfolio_items=[
+            PortfolioItem(asset_id=UUID(a["asset_id"]), category=a["category"], amount=a["amount"])
+            for a in adjusted
+        ],
         flow_items=request.flow_items,
-        rebalance_comment=final_state["rebalance_comment"],
+        rebalance_comment=comment,
     )
