@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel
 
 
 # ── Shared sub-models ─────────────────────────────────────────────────────────
@@ -35,7 +35,7 @@ class FundingSource(BaseModel):
 
 class PortfolioItem(BaseModel):
     name: str
-    ratio: float
+    ratio: int
 
 
 class InvestmentPlan(BaseModel):
@@ -44,6 +44,7 @@ class InvestmentPlan(BaseModel):
     summary: str
     funding_sources: list[FundingSource]
     gathering_account: UUID
+    amount: int
     portfolio: list[PortfolioItem]
 
 
@@ -75,13 +76,6 @@ class EventRebalanceRequest(BaseModel):
     porti_type: str
     porti_comment: str
     rebalance: RebalanceInfo
-
-    @field_validator("target_amount", mode="before")
-    @classmethod
-    def _coerce_amount(cls, v):
-        if isinstance(v, str):
-            return int(v.replace(",", "").replace("_", "").strip())
-        return v
 
 
 class EventRebalanceResponse(BaseModel):
