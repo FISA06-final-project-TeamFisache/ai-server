@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     agent_timeout_rebalance: int = 30
     agent_timeout_report: int = 60
 
+    tavily_api_key: str = ""
     internal_api_key: str = ""
 
     # DB
