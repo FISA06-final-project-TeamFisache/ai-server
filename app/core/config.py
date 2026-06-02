@@ -10,12 +10,10 @@ class Settings(BaseSettings):
 
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
-    llm_model: str = "openai/gpt-4o"
+    openai_api_key: str = ""
+    llm_model: str = "gpt-4o"
     llm_temperature: float = 0.2
-
-    model_dir: str = "./models"
-    anomaly_model_file: str = "anomaly_v1.pkl"
-    recommend_model_file: str = "recommend_v1.pkl"
+    use_openai_direct: bool = False  # True면 OpenAI 직접, False면 OpenRouter 경유
 
     agent_timeout_portfolio: int = 120
     agent_timeout_rebalance: int = 30
