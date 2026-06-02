@@ -4,12 +4,14 @@ products 테이블에 금융 상품 데이터를 적재하는 스크립트.
 적재 대상:
   - 우리은행 정기예금 (FSS API)
   - 우리은행 적금     (FSS API)
-  - 우리자산운용 ETF  (KRX API, ISU_NM에 'WON' 포함)
-  - 우리투자증권 ISA  (하드코딩)
-  - 우리투자증권 IRP  (하드코딩)
+  - 전체 상장 ETF     (pykrx 라이브러리 사용, 최근 1년 수익률 계산 포함)
+  - 국채전문유통시장 채권 (KRX API, 최근 1년 수익률 계산 포함)
+  - 우리투자증권 ISA  (정적 데이터 하드코딩)
+  - 우리투자증권 IRP  (정적 데이터 하드코딩)
+  - 우리투자증권 연금저축계좌 (정적 데이터 하드코딩)
 
 실행 전 준비:
-  pip install asyncpg asyncpg pgvector requests openai python-dotenv
+  pip install asyncpg pgvector requests openai python-dotenv pykrx pandas
 
 실행:
   python scripts/load_products.py
@@ -18,12 +20,13 @@ products 테이블에 금융 상품 데이터를 적재하는 스크립트.
 import asyncio
 import os
 import uuid
-from datetime import datetime, timezone
-from typing import Any
+from datetime import datetime, timezone, timedelta
 
 import asyncpg
 import requests
+import pandas as pd
 from dotenv import load_dotenv
+from pykrx import stock
 
 load_dotenv()
 
@@ -35,9 +38,9 @@ EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nvidia/llama-nemotron-embed-vl-1
 VECTOR_DIM = 2048
 
 FSS_BASE = "https://finlife.fss.or.kr/finlifeapi"
-KRX_ETF_URL = "https://data-dbg.krx.co.kr/svc/apis/etp/etf_bydd_trd"
+KRX_BOND_URL = "https://data-dbg.krx.co.kr/svc/apis/bon/kts_bydd_trd"
 
-# 우리투자증권 ISA/IRP 상품 (하드코딩)
+# 우리투자증권 ISA/IRP/연금저축 상품 (하드코딩)
 STATIC_PRODUCTS: list[dict] = [
     {
         "product_type": "STOCK",
@@ -45,10 +48,12 @@ STATIC_PRODUCTS: list[dict] = [
         "name": "우리투자증권 중개형 ISA",
         "interest_rate": None,
         "description": (
-            "개인종합자산관리계좌(ISA). 주식, ETF, 펀드, 채권 등 다양한 금융상품을 "
-            "하나의 계좌에서 운용하며 발생한 순이익 200만 원(서민형 400만 원)까지 비과세, "
-            "초과분은 9.9% 분리과세 혜택. 의무가입기간 3년. 납입한도 연 2,000만 원(총 1억 원). "
-            "국내 상장 주식 및 국내 주식형 펀드 투자 가능."
+            "개인종합자산관리계좌(ISA). "
+            "가입대상: 19세 이상 또는 근로소득이 있는 15세 이상 거주자. "
+            "납입한도: 연 2,000만 원, 총 1억 원. "
+            "의무가입기간 3년. 국내 상장주식, 펀드, 채권, ETF/ETN, RP 등 투자 가능. "
+            "일반형은 200만 원까지, 서민형 등은 400만 원까지 비과세 혜택이 있으며 "
+            "초과분은 9.9% 분리과세."
         ),
     },
     {
@@ -57,11 +62,23 @@ STATIC_PRODUCTS: list[dict] = [
         "name": "우리투자증권 개인형 IRP",
         "interest_rate": None,
         "description": (
-            "개인형 퇴직연금(IRP). 퇴직금 또는 자기 부담금을 납입해 운용하며 "
-            "연간 최대 900만 원(ISA 합산 포함)까지 세액공제(16.5% 또는 13.2%). "
-            "ETF, 펀드, 채권, 예금 등 안전자산 30% 이상 의무 편입. "
-            "만 55세 이후 연금 수령 시 낮은 연금소득세 적용. "
-            "중도 해지 시 기타소득세(16.5%) 부과."
+            "개인형 퇴직연금(IRP). "
+            "퇴직금 또는 본인 추가 납입금을 운용하며, 연간 납입한도는 연금저축 포함 1,800만 원. "
+            "ETF, 펀드, 채권, 예금 등 운용 가능. "
+            "만 55세 이후 연금 수령 가능하며, 연금 수령 시 연금소득세가 적용됨. "
+            "세액공제 한도와 중도해지 과세는 관련 세법 기준을 따름."
+        ),
+    },
+    {
+        "product_type": "PENSION_SAVINGS",
+        "institution": "우리투자증권",
+        "name": "우리투자증권 연금저축계좌",
+        "interest_rate": None,
+        "description": (
+            "연금저축계좌. 소득세법에서 정한 연금 수령 요건에 따라 자금을 인출하는 경우 "
+            "연금소득으로 과세되는 상품. 가입기간 5년 이상, 만 55세 이후 연금 개시 가능. "
+            "연간 납입한도는 퇴직연금 등과 합산하여 1,800만 원이며, "
+            "세액공제 한도와 공제율은 관련 세법 기준을 따름."
         ),
     },
 ]
@@ -90,7 +107,6 @@ def embed(text: str) -> list[float]:
 # ---------------------------------------------------------------------------
 
 def _fss_fetch(endpoint: str, fin_prdt_cd_filter: str | None = None) -> list[dict]:
-    """FSS API를 페이지 단위로 전체 조회하여 우리은행 상품만 반환."""
     results = []
     page = 1
     while True:
@@ -106,10 +122,7 @@ def _fss_fetch(endpoint: str, fin_prdt_cd_filter: str | None = None) -> list[dic
         base_list: list[dict] = data.get("baseList", [])
         opt_list: list[dict] = data.get("optionList", [])
         max_page = int(data.get("max_page_no", 1))
-        names = sorted({i.get("kor_co_nm", "") for i in base_list})
-        print(f"  [DEBUG] page={page}/{max_page} 전체={len(base_list)}건 회사목록: {names}")
 
-        # 상품코드 → 옵션 매핑
         opt_map: dict[str, list[dict]] = {}
         for opt in opt_list:
             key = opt.get("fin_prdt_cd", "")
@@ -166,8 +179,7 @@ def collect_fss_deposits() -> list[dict]:
 def _saving_description(item: dict) -> str:
     opts = item.get("_options", [])
     terms = ", ".join(
-        f"{o.get('save_trm')}개월/{o.get('rsrv_type_nm','')}"
-        f"({o.get('intr_rate')}%)"
+        f"{o.get('save_trm')}개월/{o.get('rsrv_type_nm','')}({o.get('intr_rate')}%)"
         for o in opts
         if o.get("save_trm") and o.get("intr_rate")
     )
@@ -201,67 +213,153 @@ def collect_fss_savings() -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# KRX ETF 수집
+# KRX ETF 수집 (pykrx 사용 & 1년 수익률 계산 추가)
 # ---------------------------------------------------------------------------
 
 def collect_krx_etf() -> list[dict]:
-    today = datetime.now(timezone.utc).strftime("%Y%m%d")
-    resp = requests.post(
-        KRX_ETF_URL,
-        json={"AUTH_KEY": KRX_API_KEY, "basDd": today},
-        timeout=15,
-    )
-    resp.raise_for_status()
+    today = datetime.now(timezone.utc)
+    today_str = today.strftime("%Y%m%d")
 
-    rows: list[dict] = resp.json().get("OutBlock_1", [])
-
-    # 거래 없는 날(주말/공휴일)이면 전 영업일로 재시도
-    if not rows:
-        from datetime import timedelta
+    # 오늘 기준 가장 최근 데이터 
+    df_today = stock.get_etf_ohlcv_by_ticker(today_str)
+    if df_today.empty:
         for delta in range(1, 8):
-            prev = (datetime.now(timezone.utc) - timedelta(days=delta)).strftime("%Y%m%d")
-            resp = requests.post(
-                KRX_ETF_URL,
-                json={"AUTH_KEY": KRX_API_KEY, "basDd": prev},
-                timeout=15,
-            )
-            resp.raise_for_status()
-            rows = resp.json().get("OutBlock_1", [])
-            if rows:
+            d = (today - timedelta(days=delta)).strftime("%Y%m%d")
+            df_today = stock.get_etf_ohlcv_by_ticker(d)
+            if not df_today.empty:
+                today_str = d
+                break
+                
+    # 1년 전 날짜 데이터 확보 (수익률 계산용)
+    one_year_ago = today - timedelta(days=365)
+    one_year_ago_str = one_year_ago.strftime("%Y%m%d")
+    df_1y = stock.get_etf_ohlcv_by_ticker(one_year_ago_str)
+    
+    if df_1y.empty:
+        for delta in range(1, 8):
+            d = (one_year_ago - timedelta(days=delta)).strftime("%Y%m%d")
+            df_1y = stock.get_etf_ohlcv_by_ticker(d)
+            if not df_1y.empty:
+                one_year_ago_str = d
                 break
 
     products = []
-    for row in rows:
-        name: str = row.get("ISU_NM", "")
-        if "WON" not in name:
-            continue
-
-        try:
-            close_price = float(row.get("TDD_CLSPRC", "0").replace(",", ""))
-        except ValueError:
-            close_price = 0.0
-
-        try:
-            nav = float(row.get("NAV", "0").replace(",", ""))
-        except ValueError:
-            nav = 0.0
+    for ticker in df_today.index:
+        name = stock.get_etf_ticker_name(ticker)
+        
+        brand = name.split()[0] if name else ""
+        close_today = float(df_today.loc[ticker, "종가"])
+        nav_today = float(df_today.loc[ticker, "NAV"])
+        
+        # 최근 1년 수익률 계산
+        interest_rate = None
+        if not df_1y.empty and ticker in df_1y.index:
+            close_1y = float(df_1y.loc[ticker, "종가"])
+            if close_1y > 0 and close_today > 0:
+                interest_rate = round(((close_today - close_1y) / close_1y) * 100, 2)
 
         description = (
             f"ETF명: {name} | "
-            f"종목코드: {row.get('ISU_CD', '')} | "
-            f"기초지수: {row.get('IDX_IND_NM', '')} | "
-            f"종가: {row.get('TDD_CLSPRC', '')}원 | "
-            f"NAV: {row.get('NAV', '')} | "
-            f"등락률: {row.get('FLUC_RT', '')}% | "
-            f"시가총액: {row.get('MKTCAP', '')}원 | "
-            f"운용사: 우리자산운용"
+            f"종목코드: {ticker} | "
+            f"종가: {close_today}원 | "
+            f"NAV: {nav_today} | "
         )
+        if interest_rate is not None:
+             description += f"최근 1년 수익률: {interest_rate}% | "
+        description += f"운용사: {brand}"
 
         products.append({
-            "product_type": "STOCK",
-            "institution": "우리자산운용",
+            "product_type": "ETF",
+            "institution": brand,
             "name": name,
-            "interest_rate": None,
+            "interest_rate": interest_rate,
+            "description": description,
+        })
+
+    return products
+
+
+# ---------------------------------------------------------------------------
+# KRX 국채 수집 (1년 수익률 계산 추가)
+# ---------------------------------------------------------------------------
+
+def _fetch_krx_bonds(date_str: str) -> list[dict]:
+    resp = requests.get(
+        url=KRX_BOND_URL,
+        headers={"AUTH_KEY": KRX_API_KEY},
+        params={"basDd": date_str},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    return resp.json().get("OutBlock_1", [])
+
+def collect_krx_bonds() -> list[dict]:
+    today = datetime.now(timezone.utc)
+    
+    # 최근 영업일 데이터 확보
+    rows_today = []
+    for delta in range(0, 8):
+        d = (today - timedelta(days=delta)).strftime("%Y%m%d")
+        rows = _fetch_krx_bonds(d)
+        if rows:
+            rows_today = rows
+            break
+            
+    # 1년 전 영업일 데이터 확보
+    one_year_ago = today - timedelta(days=365)
+    rows_1y = []
+    for delta in range(0, 8):
+        d = (one_year_ago - timedelta(days=delta)).strftime("%Y%m%d")
+        rows = _fetch_krx_bonds(d)
+        if rows:
+            rows_1y = rows
+            break
+
+    # 1년 전 종가 맵핑
+    price_1y_map = {}
+    for r in rows_1y:
+        code = r.get("ISU_CD", "")
+        try:
+            price = float(r.get("CLSPRC", "0").replace(",", ""))
+            if price > 0:
+                price_1y_map[code] = price
+        except ValueError:
+            pass
+
+    products = []
+    for row in rows_today:
+        name: str = row.get("ISU_NM", "")
+        if not name:
+            continue
+            
+        code = row.get('ISU_CD', '')
+        try:
+            close_today = float(row.get('CLSPRC', '0').replace(",", ""))
+        except ValueError:
+            close_today = 0.0
+
+        # 최근 1년 수익률 계산
+        interest_rate = None
+        close_1y = price_1y_map.get(code)
+        if close_1y and close_today > 0:
+            interest_rate = round(((close_today - close_1y) / close_1y) * 100, 2)
+
+        description = (
+            f"채권명: {name} | "
+            f"종목코드: {code} | "
+            f"시장구분: {row.get('MKT_NM', '')} | "
+            f"종목구분: {row.get('GOVBND_ISU_TP_NM', '')} | "
+            f"만기연수: {row.get('BND_EXP_TP_NM', '')} | "
+            f"종가(가격): {row.get('CLSPRC', '')} | "
+        )
+        if interest_rate is not None:
+             description += f"최근 1년 수익률: {interest_rate}% | "
+
+        products.append({
+            "product_type": "BOND",
+            "institution": "한국거래소",
+            "name": name,
+            "interest_rate": interest_rate,
             "description": description,
         })
 
@@ -287,9 +385,9 @@ DO UPDATE SET
     updated_at    = EXCLUDED.updated_at
 """
 
-
-async def ensure_embedding_column(conn: asyncpg.Connection) -> None:
+async def ensure_schema(conn: asyncpg.Connection) -> None:
     await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+
     col_exists = await conn.fetchval("""
         SELECT 1 FROM information_schema.columns
         WHERE table_name = 'products' AND column_name = 'embedding'
@@ -299,9 +397,19 @@ async def ensure_embedding_column(conn: asyncpg.Connection) -> None:
             f"ALTER TABLE products ADD COLUMN embedding vector({VECTOR_DIM})"
         )
         print(f"embedding vector({VECTOR_DIM}) 컬럼 추가 완료")
-    else:
-        print("embedding 컬럼 이미 존재, 스킵")
 
+    constraint_exists = await conn.fetchval("""
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE table_name = 'products'
+          AND constraint_type = 'UNIQUE'
+          AND constraint_name = 'uq_products_name_institution'
+    """)
+    if not constraint_exists:
+        await conn.execute(
+            "ALTER TABLE products ADD CONSTRAINT uq_products_name_institution "
+            "UNIQUE (name, institution)"
+        )
+        print("UNIQUE(name, institution) 제약 추가 완료")
 
 async def load(products: list[dict]) -> None:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -309,7 +417,7 @@ async def load(products: list[dict]) -> None:
 
     try:
         await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-        await ensure_embedding_column(conn)
+        await ensure_schema(conn)
 
         total = len(products)
         for i, p in enumerate(products, 1):
@@ -324,7 +432,7 @@ async def load(products: list[dict]) -> None:
                 p["product_type"],
                 p["institution"],
                 p["name"],
-                p["interest_rate"],
+                p["interest_rate"],  # 이제 수익률 값도 들어갑니다.
                 p["description"],
                 vector_str,
                 now,
@@ -348,15 +456,16 @@ def _try_collect(label: str, fn) -> list[dict]:
 async def main() -> None:
     print("=== 상품 데이터 수집 시작 ===\n")
 
-    deposits = _try_collect("[1/4] FSS 정기예금", collect_fss_deposits)
-    savings  = _try_collect("[2/4] FSS 적금",    collect_fss_savings)
-    etfs     = _try_collect("[3/4] KRX ETF",     collect_krx_etf)
+    deposits = _try_collect("[1/5] FSS 정기예금", collect_fss_deposits)
+    savings  = _try_collect("[2/5] FSS 적금",        collect_fss_savings)
+    etfs     = _try_collect("[3/5] KRX ETF (pykrx)", collect_krx_etf)
+    bonds    = _try_collect("[4/5] KRX 국채",        collect_krx_bonds)
 
-    print("[4/4] ISA/IRP 정적 데이터 준비...")
+    print("[5/5] ISA/IRP/연금저축계좌 정적 데이터 준비...")
     static = STATIC_PRODUCTS
     print(f"  → {len(static)}건\n")
 
-    all_products = deposits + savings + etfs + static
+    all_products = deposits + savings + etfs + bonds + static
     if not all_products:
         print("수집된 상품이 없어 종료합니다.")
         return
