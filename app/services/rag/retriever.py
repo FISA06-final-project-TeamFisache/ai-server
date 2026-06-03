@@ -1,4 +1,6 @@
 """products 테이블에서 금융 상품 정보를 조회해 LLM 컨텍스트 문자열로 변환한다."""
+from __future__ import annotations
+
 import logging
 
 from app.services.rag.knowledge import FINANCIAL_KNOWLEDGE

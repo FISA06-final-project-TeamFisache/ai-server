@@ -47,7 +47,7 @@ class RebalanceRequest(BaseModel):
 class SalaryRebalanceItem(BaseModel):
     asset_id: UUID
     category: str
-    amount: int
+    ratio: int
 
 
 class RebalanceResponse(BaseModel):
