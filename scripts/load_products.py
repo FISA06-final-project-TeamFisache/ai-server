@@ -4,14 +4,14 @@ products 테이블에 금융 상품 데이터를 적재하는 스크립트.
 적재 대상:
   - 우리은행 정기예금 (FSS API)
   - 우리은행 적금     (FSS API)
-  - 전체 상장 ETF     (pykrx 라이브러리 사용, 최근 1년 수익률 계산 포함)
+  - 전체 상장 ETF     (KRX Open API, 최근 1년 수익률 계산 포함)
   - 국채전문유통시장 채권 (KRX API, 최근 1년 수익률 계산 포함)
   - 우리투자증권 ISA  (정적 데이터 하드코딩)
   - 우리투자증권 IRP  (정적 데이터 하드코딩)
   - 우리투자증권 연금저축계좌 (정적 데이터 하드코딩)
 
 실행 전 준비:
-  pip install asyncpg pgvector requests openai python-dotenv pykrx pandas
+  pip install asyncpg pgvector requests openai python-dotenv pandas
 
 실행:
   python scripts/load_products.py
@@ -24,9 +24,7 @@ from datetime import datetime, timezone, timedelta
 
 import asyncpg
 import requests
-import pandas as pd
 from dotenv import load_dotenv
-from pykrx import stock
 
 load_dotenv()
 
@@ -38,6 +36,7 @@ EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nvidia/llama-nemotron-embed-vl-1
 VECTOR_DIM = 2048
 
 FSS_BASE = "https://finlife.fss.or.kr/finlifeapi"
+KRX_ETF_URL  = "https://data-dbg.krx.co.kr/svc/apis/etp/etf_bydd_trd"
 KRX_BOND_URL = "https://data-dbg.krx.co.kr/svc/apis/bon/kts_bydd_trd"
 
 # 우리투자증권 ISA/IRP/연금저축 상품 (하드코딩)
@@ -213,59 +212,86 @@ def collect_fss_savings() -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# KRX ETF 수집 (pykrx 사용 & 1년 수익률 계산 추가)
+# KRX ETF 수집 (KRX Open API 사용 & 1년 수익률 계산)
 # ---------------------------------------------------------------------------
 
-def collect_krx_etf() -> list[dict]:
-    today = datetime.now(timezone.utc)
-    today_str = today.strftime("%Y%m%d")
+def _fetch_krx_etf(date_str: str) -> list[dict]:
+    resp = requests.get(
+        url=KRX_ETF_URL,
+        headers={"AUTH_KEY": KRX_API_KEY},
+        params={"basDd": date_str},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    return resp.json().get("OutBlock_1", [])
 
-    # 오늘 기준 가장 최근 데이터 
-    df_today = stock.get_etf_ohlcv_by_ticker(today_str)
-    if df_today.empty:
-        for delta in range(1, 8):
-            d = (today - timedelta(days=delta)).strftime("%Y%m%d")
-            df_today = stock.get_etf_ohlcv_by_ticker(d)
-            if not df_today.empty:
-                today_str = d
-                break
-                
-    # 1년 전 날짜 데이터 확보 (수익률 계산용)
+
+def _nearest_trading_date(base: datetime, max_lookback: int = 8) -> tuple[str, list[dict]]:
+    """base 날짜부터 최대 max_lookback일 전까지 ETF 데이터가 있는 가장 가까운 거래일 반환."""
+    for delta in range(0, max_lookback):
+        d = (base - timedelta(days=delta)).strftime("%Y%m%d")
+        rows = _fetch_krx_etf(d)
+        if rows:
+            return d, rows
+    return "", []
+
+
+def collect_krx_etf() -> list[dict]:
+    # KST 기준 날짜 사용 (UTC+9)
+    today = datetime.now(timezone.utc) + timedelta(hours=9)
+
+    # 기준일(가장 가까운 거래일) 데이터
+    base_date_str, rows_today = _nearest_trading_date(today)
+    if not rows_today:
+        print("  ETF 기준일 데이터 없음")
+        return []
+
+    # 1년 전 가장 가까운 거래일 데이터
     one_year_ago = today - timedelta(days=365)
-    one_year_ago_str = one_year_ago.strftime("%Y%m%d")
-    df_1y = stock.get_etf_ohlcv_by_ticker(one_year_ago_str)
-    
-    if df_1y.empty:
-        for delta in range(1, 8):
-            d = (one_year_ago - timedelta(days=delta)).strftime("%Y%m%d")
-            df_1y = stock.get_etf_ohlcv_by_ticker(d)
-            if not df_1y.empty:
-                one_year_ago_str = d
-                break
+    _, rows_1y = _nearest_trading_date(one_year_ago)
+
+    # 1년 전 종가 맵: ISU_CD → 종가
+    price_1y_map: dict[str, float] = {}
+    for r in rows_1y:
+        code = r.get("ISU_CD", "")
+        try:
+            price = float(r.get("TDD_CLSPRC", "0").replace(",", ""))
+            if price > 0:
+                price_1y_map[code] = price
+        except ValueError:
+            pass
 
     products = []
-    for ticker in df_today.index:
-        name = stock.get_etf_ticker_name(ticker)
-        
-        brand = name.split()[0] if name else ""
-        close_today = float(df_today.loc[ticker, "종가"])
-        nav_today = float(df_today.loc[ticker, "NAV"])
-        
-        # 최근 1년 수익률 계산
+    for row in rows_today:
+        code = row.get("ISU_CD", "")
+        name = row.get("ISU_NM", "")
+        if not name:
+            continue
+
+        # 1년 전에도 거래된 종목만 포함
+        close_1y = price_1y_map.get(code)
+        if close_1y is None:
+            continue
+
+        try:
+            close_today = float(row.get("TDD_CLSPRC", "0").replace(",", ""))
+        except ValueError:
+            close_today = 0.0
+
         interest_rate = None
-        if not df_1y.empty and ticker in df_1y.index:
-            close_1y = float(df_1y.loc[ticker, "종가"])
-            if close_1y > 0 and close_today > 0:
-                interest_rate = round(((close_today - close_1y) / close_1y) * 100, 2)
+        if close_1y > 0 and close_today > 0:
+            interest_rate = round(((close_today - close_1y) / close_1y) * 100, 2)
+
+        brand = name.split()[0] if name else ""
 
         description = (
             f"ETF명: {name} | "
-            f"종목코드: {ticker} | "
-            f"종가: {close_today}원 | "
-            f"NAV: {nav_today} | "
+            f"종목코드: {code} | "
+            f"종가: {row.get('TDD_CLSPRC', '')}원 | "
+            f"거래량: {row.get('ACC_TRDVOL', '')} | "
         )
         if interest_rate is not None:
-             description += f"최근 1년 수익률: {interest_rate}% | "
+            description += f"최근 1년 수익률: {interest_rate}% | "
         description += f"운용사: {brand}"
 
         products.append({
@@ -331,7 +357,7 @@ def collect_krx_bonds() -> list[dict]:
         name: str = row.get("ISU_NM", "")
         if not name:
             continue
-            
+
         code = row.get('ISU_CD', '')
         try:
             close_today = float(row.get('CLSPRC', '0').replace(",", ""))
@@ -458,7 +484,7 @@ async def main() -> None:
 
     deposits = _try_collect("[1/5] FSS 정기예금", collect_fss_deposits)
     savings  = _try_collect("[2/5] FSS 적금",        collect_fss_savings)
-    etfs     = _try_collect("[3/5] KRX ETF (pykrx)", collect_krx_etf)
+    etfs     = _try_collect("[3/5] KRX ETF (KRX API)", collect_krx_etf)
     bonds    = _try_collect("[4/5] KRX 국채",        collect_krx_bonds)
 
     print("[5/5] ISA/IRP/연금저축계좌 정적 데이터 준비...")
