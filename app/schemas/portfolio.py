@@ -23,14 +23,14 @@ class ProfileRequest(BaseModel):
     category_expense: list[CategoryExpenseItem]
     porti_type: str
     porti_comment: str
-    assets: list[AssetItem]
+    assets_safe: int
+    assets_risky: int
 
 
 class ProfileResponse(BaseModel):
     created_at: datetime
     expense_comment: str
     invest_comment: str
-    savings_comment: str
 
 
 # ── POST /portfolio/rebalance ─────────────────────────────────────────────────
@@ -69,30 +69,41 @@ class ProductItem(BaseModel):
 class AssetPortfolioRequest(BaseModel):
     user_id: UUID
     invest_amount: int
+    interest: str
+    invest_interest: list[str]
     porti_type: str
     porti_comment: str
     invest_assets: list[AssetItem]
-    products: list[ProductItem]
 
 
-class FundingSource(BaseModel):
-    asset_id: UUID
-    amount: int
+class GatheringAccount(BaseModel):
+    name: str
+    type: str
+    institution: str
+    interest_rate: float
 
 
 class PortfolioItem(BaseModel):
+    type: str
     name: str
     ratio: int
+    interest_rate: float
+    comment: str
 
 
 class InvestmentPlan(BaseModel):
     title: str
     term: str
     summary: str
-    funding_sources: list[FundingSource]
-    gathering_account: UUID
+    gathering_id: UUID
+    gathering_account: GatheringAccount
     amount: int
+    account_comment: str
     portfolio: list[PortfolioItem]
+    expected_rr_pct: float
+    investment_months: int
+    expected_amount: float
+    rr_comment: str
 
 
 class AssetPortfolioResponse(BaseModel):

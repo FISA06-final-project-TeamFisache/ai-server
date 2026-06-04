@@ -89,6 +89,45 @@ async def get_products_context(
         return ""
 
 
+async def get_products_list(
+    product_types: list[str] | None = None,
+    limit: int = 30,
+) -> list[dict]:
+    """DB에서 상품을 조회해 dict 리스트로 반환한다."""
+    from app.services.rag.db import get_pool
+
+    pool = await get_pool()
+    if pool is None:
+        return []
+
+    try:
+        if product_types:
+            normalized = list({
+                _ALIAS_MAP.get(t.lower(), t.upper()) for t in product_types
+            })
+            rows = await pool.fetch(
+                "SELECT product_type, institution, name, interest_rate, description "
+                "FROM products "
+                "WHERE product_type = ANY($1::text[]) AND deleted_at IS NULL "
+                "ORDER BY product_type, interest_rate DESC NULLS LAST "
+                "LIMIT $2",
+                normalized, limit,
+            )
+        else:
+            rows = await pool.fetch(
+                "SELECT product_type, institution, name, interest_rate, description "
+                "FROM products "
+                "WHERE deleted_at IS NULL "
+                "ORDER BY product_type, interest_rate DESC NULLS LAST "
+                "LIMIT $1",
+                limit,
+            )
+        return [dict(row) for row in rows]
+    except Exception as e:
+        logger.warning("상품 목록 조회 실패: %s", e)
+        return []
+
+
 async def build_rag_context(product_types: list[str] | None = None) -> str:
     """금융 지식 + DB 상품 정보를 합쳐 단일 컨텍스트 문자열을 반환한다."""
     products = await get_products_context(product_types)

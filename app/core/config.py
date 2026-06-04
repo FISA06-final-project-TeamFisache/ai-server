@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     tavily_api_key: str = ""
     internal_api_key: str = ""
 
+    langchain_tracing_v2: str = ""
+    langchain_endpoint: str = ""
+    langchain_api_key: str = ""
+    langchain_project: str = ""
+
     # DB
     db_url: str = ""
     db_transaction_table: str = ""

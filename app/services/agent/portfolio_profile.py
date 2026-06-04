@@ -48,56 +48,28 @@ async def _generate_invest_comment(porti_type: str, asset_summary: str) -> str:
     return result.content.strip()
 
 
-async def _generate_savings_comment(porti_type: str, savings_summary: str) -> str:
-    llm = get_llm(temperature=0.5)
-    messages = [
-        SystemMessage(content=(
-            "당신은 사용자의 저축 상황을 편하게 이야기해주는 금융 친구예요.\n"
-            "비상금이나 저축 구성을 보고 솔직하게 한마디 건네주세요.\n\n"
-            "- 현재 상태를 긍정적으로 인정하되, 빠진 게 있다면 가볍게 짚어주세요.\n"
-            "- 비상금 기준(월 지출 3~6배)이 있으면 실제와 비교해 알려주세요.\n"
-            "- 70자 내외로 짧게. 줄바꿈 없이 한 흐름으로.\n"
-            "- 이모지·특수문자 금지."
-        )),
-        HumanMessage(content=(
-            f"PorTI 유형: {porti_type}\n"
-            f"저축·예금 현황: {savings_summary}"
-        )),
-    ]
-    result = await llm.ainvoke(messages)
-    return result.content.strip()
-
-
 async def analyze_profile(request: ProfileRequest) -> ProfileResponse:
     expense_summary = ", ".join(
         f"{e.name} {e.expense:,}원" for e in request.category_expense
     ) or "거래 내역 없음"
 
-    RISK_TYPES = {"STOCK", "IRP", "ISA"}
-    total_balance = sum(a.balance for a in request.assets)
-    risk_balance = sum(a.balance for a in request.assets if a.asset_type in RISK_TYPES)
-    risk_ratio = round(risk_balance * 100 / total_balance) if total_balance > 0 else 0
+    # 자산 구성 분석 (assets_safe / assets_risky 사용)
+    total = request.assets_safe + request.assets_risky
+    risk_ratio = round(request.assets_risky * 100 / total) if total > 0 else 0
     asset_summary = (
         f"위험자산(주식·IRP·ISA) {risk_ratio}% / "
         f"안전자산 {100 - risk_ratio}%, "
-        f"총 자산 {total_balance:,}원"
+        f"총 자산 {total:,}원 (안전 {request.assets_safe:,}원 / 위험 {request.assets_risky:,}원)"
     )
 
-    SAVINGS_TYPES = {"SAVINGS", "DEPOSIT", "PARKING", "CHECKING", "CMA"}
-    savings_assets = [a for a in request.assets if a.asset_type in SAVINGS_TYPES]
-    savings_summary = ", ".join(
-        f"{a.account_name}({a.asset_type}) {a.balance:,}원" for a in savings_assets
-    ) if savings_assets else "저축 계좌 없음"
-
-    expense_comment, invest_comment, savings_comment = await asyncio.gather(
+    # 2개 LLM 호출 병렬 실행
+    expense_comment, invest_comment = await asyncio.gather(
         _generate_expense_comment(request.porti_type, request.porti_comment, expense_summary),
         _generate_invest_comment(request.porti_type, asset_summary),
-        _generate_savings_comment(request.porti_type, savings_summary),
     )
 
     return ProfileResponse(
         created_at=datetime.now(timezone.utc),
         expense_comment=expense_comment,
         invest_comment=invest_comment,
-        savings_comment=savings_comment,
     )
