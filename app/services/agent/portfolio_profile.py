@@ -53,13 +53,14 @@ async def analyze_profile(request: ProfileRequest) -> ProfileResponse:
         f"{e.name} {e.expense:,}원" for e in request.category_expense
     ) or "거래 내역 없음"
 
-    # 자산 구성 분석 (assets_safe / assets_risky 사용)
-    total = request.assets_safe + request.assets_risky
-    risk_ratio = round(request.assets_risky * 100 / total) if total > 0 else 0
+    total = request.assets_safe + request.assets_moderate + request.assets_risky
+    risk_ratio     = round(request.assets_risky    * 100 / total) if total > 0 else 0
+    moderate_ratio = round(request.assets_moderate * 100 / total) if total > 0 else 0
+    safe_ratio     = 100 - risk_ratio - moderate_ratio
     asset_summary = (
-        f"위험자산(주식·IRP·ISA) {risk_ratio}% / "
-        f"안전자산 {100 - risk_ratio}%, "
-        f"총 자산 {total:,}원 (안전 {request.assets_safe:,}원 / 위험 {request.assets_risky:,}원)"
+        f"위험자산(주식·IRP·ISA) {risk_ratio}% / 중립자산 {moderate_ratio}% / 안전자산 {safe_ratio}%, "
+        f"총 자산 {total:,}원 "
+        f"(안전 {request.assets_safe:,}원 / 중립 {request.assets_moderate:,}원 / 위험 {request.assets_risky:,}원)"
     )
 
     # 2개 LLM 호출 병렬 실행

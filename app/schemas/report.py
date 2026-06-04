@@ -4,6 +4,15 @@ from uuid import UUID
 from pydantic import BaseModel
 
 
+class MiniChallenges(BaseModel):
+    title: str
+    description: str
+    status: str
+    challenge_type: str
+    target: int
+    started_at: datetime
+    completed_at: datetime | None
+
 class AssetSnapshot(BaseModel):
     snapshot_at: datetime
     total_amount: int
@@ -27,10 +36,7 @@ class ReportRequest(BaseModel):
     user_id: UUID
     year: int
     month: int
-    title: str
-    deadline: datetime
-    target_amount: int
-    goal_progress: int
+    mini_challenges: list[MiniChallenges]
     asset_snapshots: list[AssetSnapshot]
     transaction_log: list[TransactionLog]
 
@@ -38,9 +44,7 @@ class ReportRequest(BaseModel):
 class ReportResponse(BaseModel):
     created_at: datetime
     trend_comment: str
-    event_comment: str
+    challenge_comment: str
     market_condition: str
     hover_description: list[HoverDescription]
     guideline: str
-    performance_status: str
-    performance_comment: str

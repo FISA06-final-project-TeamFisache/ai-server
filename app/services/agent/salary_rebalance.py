@@ -17,17 +17,26 @@ def _calculate_adjusted(current: list[dict], salary_diff: int) -> list[dict]:
     ]
 
 
-async def _generate_comment(salary_diff: int, before: list[dict], after: list[dict]) -> str:
+async def _generate_comment(
+    salary_diff: int,
+    before: list[dict],
+    after: list[dict],
+    category_expense: list,
+) -> str:
     llm = get_llm(temperature=0.1)
     direction = "초과" if salary_diff > 0 else "결손"
 
-    before_map = {a["category"]: a["amount"] for a in before}
+    before_map = {a["account_purpose"]: a["amount"] for a in before}
     change_summary = "\n".join(
-        f"  - {a['category']}: {before_map.get(a['category'], 0):,}원 → {a['amount']:,}원"
-        f" ({'+' if a['amount'] - before_map.get(a['category'], 0) >= 0 else ''}"
-        f"{a['amount'] - before_map.get(a['category'], 0):,}원)"
+        f"  - {a['account_purpose']}: {before_map.get(a['account_purpose'], 0):,}원 → {a['amount']:,}원"
+        f" ({'+' if a['amount'] - before_map.get(a['account_purpose'], 0) >= 0 else ''}"
+        f"{a['amount'] - before_map.get(a['account_purpose'], 0):,}원)"
         for a in after
     )
+
+    expense_summary = "\n".join(
+        f"  - {e.name}: {e.expense:,}원" for e in category_expense
+    ) if category_expense else "  소비 내역 없음"
 
     messages = [
         SystemMessage(content=(
@@ -40,6 +49,7 @@ async def _generate_comment(salary_diff: int, before: list[dict], after: list[di
         )),
         HumanMessage(content=(
             f"월급 {direction}: {abs(salary_diff):,}원\n\n"
+            f"이번 달 소비 패턴:\n{expense_summary}\n\n"
             f"조정 결과:\n{change_summary}"
         )),
     ]
@@ -55,20 +65,20 @@ async def _generate_comment(salary_diff: int, before: list[dict], after: list[di
 
 async def analyze_salary_rebalance(request: SalaryRequest) -> SalaryResponse:
     current = [
-        {"asset_id": str(item.asset_id), "category": item.category, "amount": item.amount}
+        {"asset_id": str(item.asset_id), "account_purpose": item.account_purpose, "amount": item.amount}
         for item in request.portfolio_items
     ]
 
-    # 1. 계산 먼저
     adjusted = _calculate_adjusted(current, request.salary_diff)
 
-    # 2. 실제 결과를 LLM에 전달해 정확한 코멘트 생성
-    comment = await _generate_comment(request.salary_diff, current, adjusted)
+    comment = await _generate_comment(
+        request.salary_diff, current, adjusted, request.category_expense
+    )
 
     return SalaryResponse(
         created_at=datetime.now(timezone.utc),
         portfolio_items=[
-            PortfolioItem(asset_id=UUID(a["asset_id"]), category=a["category"], amount=a["amount"])
+            PortfolioItem(asset_id=UUID(a["asset_id"]), account_purpose=a["account_purpose"], amount=a["amount"])
             for a in adjusted
         ],
         flow_items=request.flow_items,

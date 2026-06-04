@@ -24,6 +24,7 @@ class ProfileRequest(BaseModel):
     porti_type: str
     porti_comment: str
     assets_safe: int
+    assets_moderate: int # 투자 성향이 중간인 자산 비중
     assets_risky: int
 
 
@@ -46,8 +47,9 @@ class RebalanceRequest(BaseModel):
 
 class SalaryRebalanceItem(BaseModel):
     asset_id: UUID
-    category: str
+    account_purpose: str
     ratio: int
+    comment: str  # 용도와 금액 산정에 대한 설명
 
 
 class RebalanceResponse(BaseModel):
