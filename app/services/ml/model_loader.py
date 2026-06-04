@@ -3,19 +3,18 @@ import os
 
 import joblib
 
-from app.core.config import settings
+from app.core import config
 
 logger = logging.getLogger(__name__)
 _models: dict = {}
 
 
 def load_all_models() -> None:
-    model_dir = settings.model_dir
     for name, filename in [
-        ("anomaly", settings.anomaly_model_file),
-        ("recommend", settings.recommend_model_file),
+        ("anomaly", config.ANOMALY_MODEL_FILE),
+        ("recommend", config.RECOMMEND_MODEL_FILE),
     ]:
-        path = os.path.join(model_dir, filename)
+        path = os.path.join(config.MODEL_DIR, filename)
         if os.path.exists(path):
             _models[name] = joblib.load(path)
             logger.info("Loaded model: %s from %s", name, path)

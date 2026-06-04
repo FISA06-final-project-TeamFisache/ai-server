@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 from typing import TypedDict
 from uuid import UUID
@@ -8,6 +9,8 @@ from pydantic import BaseModel, Field
 
 from app.schemas.portfolio import RebalanceRequest, RebalanceResponse, SalaryRebalanceItem
 from app.services.agent.llm import get_llm, invoke_structured
+
+logger = logging.getLogger(__name__)
 
 
 class _AllocationItem(BaseModel):
@@ -146,7 +149,8 @@ def _plan_rebalance(state: RebalanceState) -> RebalanceState:
 
         return {**state, "invest_amount": invest_amount, "allocations": allocations}
 
-    except Exception:
+    except Exception as e:
+        logger.warning("배분 계획 처리 실패, 기본값 사용: %s", e)
         return {**state, "invest_amount": default_invest, "allocations": []}
 
 

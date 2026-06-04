@@ -1,8 +1,21 @@
 import logging
+import os
 from contextlib import asynccontextmanager
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.core.exceptions import register_exception_handlers
 from app.db.connection import close_pool
@@ -37,6 +50,7 @@ app.add_middleware(
 )
 
 register_exception_handlers(app)
+Instrumentator().instrument(app).expose(app)
 app.include_router(challenge_router)
 app.include_router(mini_challenge_router)
 app.include_router(portfolio_router)

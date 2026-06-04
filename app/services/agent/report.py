@@ -1,23 +1,27 @@
 import json
+import logging
+import os
 import re
 from datetime import datetime, timezone
 from typing import TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
+from tavily import TavilyClient
 
-from app.core.config import settings
 from app.schemas.report import HoverDescription, ReportRequest, ReportResponse
 from app.services.agent.llm import get_llm
+
+logger = logging.getLogger(__name__)
 
 
 def _fetch_market_news() -> str:
     """Tavily로 최신 한국 금융 시장 뉴스 검색. 키 없으면 빈 문자열 반환."""
-    if not settings.tavily_api_key:
+    tavily_api_key = os.environ.get("TAVILY_API_KEY", "")
+    if not tavily_api_key:
         return ""
     try:
-        from tavily import TavilyClient
-        client = TavilyClient(api_key=settings.tavily_api_key)
+        client = TavilyClient(api_key=tavily_api_key)
         results = client.search(
             query="한국 주식 금리 경제 시장 동향",
             search_depth="basic",
@@ -25,7 +29,8 @@ def _fetch_market_news() -> str:
         )
         snippets = [r.get("content", "") for r in results.get("results", []) if r.get("content")]
         return "\n".join(snippets[:3])
-    except Exception:
+    except Exception as e:
+        logger.warning("시장 뉴스 조회 실패: %s", e)
         return ""
 
 
@@ -87,7 +92,8 @@ def _parse_report(state: ReportState) -> ReportState:
     try:
         match = re.search(r"\{.*\}", state["strategy_raw"], re.DOTALL)
         data = json.loads(match.group()) if match else {}
-    except Exception:
+    except Exception as e:
+        logger.warning("리포트 JSON 파싱 실패: %s", e)
         data = {}
 
     status = data.get("performance_status", "ON_TRACK")

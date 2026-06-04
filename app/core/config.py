@@ -1,34 +1,13 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
+OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+LLM_TEMPERATURE: float = 0.2
 
+AGENT_TIMEOUT_PORTFOLIO: int = 120
+AGENT_TIMEOUT_REBALANCE: int = 30
+AGENT_TIMEOUT_REPORT: int = 60
 
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+APP_PORT: int = 8000
+LOG_LEVEL: str = "INFO"
 
-    app_env: str = "development"
-    app_port: int = 8000
-    log_level: str = "INFO"
-
-    openrouter_api_key: str = ""
-    openrouter_base_url: str = "https://openrouter.ai/api/v1"
-    openai_api_key: str = ""
-    llm_model: str = "gpt-4o"
-    llm_temperature: float = 0.2
-    use_openai_direct: bool = False  # True면 OpenAI 직접, False면 OpenRouter 경유
-
-    agent_timeout_portfolio: int = 120
-    agent_timeout_rebalance: int = 30
-    agent_timeout_report: int = 60
-
-    tavily_api_key: str = ""
-    internal_api_key: str = ""
-
-    langchain_tracing_v2: str = ""
-    langchain_endpoint: str = ""
-    langchain_api_key: str = ""
-    langchain_project: str = ""
-
-    # DB
-    db_url: str = ""
-
-
-settings = Settings()
+MODEL_DIR: str = "./models"
+ANOMALY_MODEL_FILE: str = "anomaly_model.pkl"
+RECOMMEND_MODEL_FILE: str = "recommend_model.pkl"

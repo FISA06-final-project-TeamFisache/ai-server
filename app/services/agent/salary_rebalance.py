@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from uuid import UUID
@@ -7,6 +8,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.schemas.salary import SalaryRequest, SalaryResponse, PortfolioItem
 from app.services.agent.llm import get_llm
+
+logger = logging.getLogger(__name__)
 
 
 def _calculate_adjusted(current: list[dict], salary_diff: int) -> list[dict]:
@@ -59,7 +62,8 @@ async def _generate_comment(
         match = re.search(r"\{.*\}", result.content.strip(), re.DOTALL)
         data = json.loads(match.group()) if match else {}
         return data.get("rebalance_comment", f"월급 {direction} {abs(salary_diff):,}원을 각 항목에 맞게 조정했어요.")
-    except Exception:
+    except Exception as e:
+        logger.warning("리밸런싱 코멘트 JSON 파싱 실패: %s", e)
         return f"월급 {direction} {abs(salary_diff):,}원을 각 항목에 맞게 조정했어요."
 
 

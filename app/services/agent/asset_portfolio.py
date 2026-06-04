@@ -1,20 +1,18 @@
 import json
 import logging
 import math
+import os
 import re
 from datetime import datetime, timezone
 from typing import TypedDict
 from uuid import UUID
 
+import httpx
+from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 
-from app.core.config import settings
-from dotenv import load_dotenv
-
-load_dotenv()
-import os
 from app.schemas.portfolio import (
     AssetPortfolioRequest,
     AssetPortfolioResponse,
@@ -22,7 +20,8 @@ from app.schemas.portfolio import (
     InvestmentPlan,
     PortfolioItem,
 )
-from app.services.agent.llm import get_llm, invoke_structured
+from app.services.agent.llm import get_llm, invoke_structured, openrouter_api_key, openrouter_base_url
+from app.services.rag.db import get_pool
 
 logger = logging.getLogger(__name__)
 
@@ -90,19 +89,18 @@ class AssetPortfolioState(TypedDict):
 # ── 임베딩 ─────────────────────────────────────────────────────────────────────
 
 async def _get_embedding(text: str) -> list[float] | None:
-    if not os.environ.get("OPENROUTER_API_KEY") or not text.strip():
+    if not openrouter_api_key or not text.strip():
         return None
     try:
-        import httpx
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
-                f"{os.environ.get('OPENROUTER_BASE_URL')}/embeddings",
-                headers={"Authorization": f"Bearer {os.environ.get('OPENROUTER_API_KEY')}"},
+                f"{openrouter_base_url}/embeddings",
+                headers={"Authorization": f"Bearer {openrouter_api_key}"},
                 json={"model": _EMBED_MODEL, "input": text},
             )
             resp.raise_for_status()
             return resp.json()["data"][0]["embedding"]
-    except Exception as e:
+    except httpx.HTTPError as e:
         logger.warning("임베딩 생성 실패: %s", e)
         return None
 
@@ -110,8 +108,6 @@ async def _get_embedding(text: str) -> list[float] | None:
 # ── Node: preprocess ──────────────────────────────────────────────────────────
 
 async def _preprocess(state: AssetPortfolioState) -> AssetPortfolioState:
-    from app.services.rag.db import get_pool
-
     asset_by_type: dict[str, list[dict]] = {}
     for a in state["asset_list"]:
         asset_by_type.setdefault(a["asset_type"], []).append(a)
@@ -222,7 +218,8 @@ async def _define_flows(state: AssetPortfolioState) -> AssetPortfolioState:
         match = re.search(r"\{.*\}", result.content, re.DOTALL)
         data = json.loads(match.group()) if match else {}
         llm_map = {f["flow_type"]: f for f in data.get("flows", [])}
-    except Exception:
+    except Exception as e:
+        logger.warning("흐름 정의 JSON 파싱 실패: %s", e)
         llm_map = {}
 
     # ratio 합계가 100이 아니면 균등 분배로 fallback
@@ -321,10 +318,10 @@ def _select_accounts(state: AssetPortfolioState) -> AssetPortfolioState:
 
 async def _search_trends(state: AssetPortfolioState) -> AssetPortfolioState:
     trend_context = ""
-    if os.environ.get("TAVILY_API_KEY"):
+    tavily_api_key = os.environ.get("TAVILY_API_KEY", "")
+    if tavily_api_key:
         try:
-            from langchain_community.tools.tavily_search import TavilySearchResults
-            tool = TavilySearchResults(max_results=3, tavily_api_key=os.environ.get("TAVILY_API_KEY"))
+            tool = TavilySearchResults(max_results=3, tavily_api_key=tavily_api_key)
             results = await tool.ainvoke({"query": "2025 ETF 채권 투자 트렌드 한국 추천"})
             if isinstance(results, list):
                 trend_context = "\n".join(
@@ -386,7 +383,8 @@ async def _select_products(state: AssetPortfolioState) -> AssetPortfolioState:
         match = re.search(r"\{.*\}", result.content, re.DOTALL)
         data = json.loads(match.group()) if match else {}
         llm_map = {fp["flow_type"]: fp["portfolio"] for fp in data.get("flow_products", [])}
-    except Exception:
+    except Exception as e:
+        logger.warning("상품 선택 JSON 파싱 실패: %s", e)
         llm_map = {}
 
     flow_products = [
@@ -439,7 +437,8 @@ async def _reflect(state: AssetPortfolioState) -> AssetPortfolioState:
     try:
         match = re.search(r"\{.*\}", result.content, re.DOTALL)
         data = json.loads(match.group()) if match else {}
-    except Exception:
+    except Exception as e:
+        logger.warning("포트폴리오 검증 JSON 파싱 실패: %s", e)
         data = {}
 
     return {**state, "reflection": {
@@ -477,7 +476,8 @@ async def _refine(state: AssetPortfolioState) -> AssetPortfolioState:
         match = re.search(r"\{.*\}", result.content, re.DOTALL)
         data = json.loads(match.group()) if match else {}
         refined_map = {fp["flow_type"]: fp["portfolio"] for fp in data.get("flow_products", [])}
-    except Exception:
+    except Exception as e:
+        logger.warning("포트폴리오 수정 JSON 파싱 실패: %s", e)
         refined_map = {}
 
     new_flow_products = [
