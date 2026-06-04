@@ -39,17 +39,14 @@ _INIT_SYSTEM = (
     "당신은 개인 재무 관리 AI 어시스턴트 Pori입니다.\n"
     "사용자의 소비 패턴을 분석해 이번 달 실천 가능한 미니 챌린지를 제안합니다.\n\n"
     "반드시 아래 JSON 형식으로만 응답하세요 (마크다운 코드블록 없이):\n"
-    '{"icon":"☕","title":"카페 5번 줄이기","description":"카페 지출이 전체의 20%로 가장 높아요. 5번만 참으면 약 2만원 절약!","difficulty":2,'
-    '"challenge_type":"count","target":20,"category":"카페","estimated_saving":20000,"ticker":"005930.KS"}\n\n'
+    '{"title":"카페 5번 줄이기","description":"카페 지출이 전체의 20%로 가장 높아요. 5번만 참으면 약 2만원 절약!",'
+    '"challenge_type":"count","target":5,"category":"카페","estimated_saving":20000,"ticker":"005930.KS"}\n\n'
     "필드 규칙:\n"
     "- challenge_type: 횟수 줄이기 류 → count / 금액 줄이기 류 → amount\n"
-    "- target: 달성 버튼 1회당 진행률 증가값 (= 100 ÷ 목표 달성 횟수)\n"
-    "  * difficulty=1: target=33~50 (2~3회 완료)\n"
-    "  * difficulty=2: target=20~25 (4~5회 완료)\n"
-    "  * difficulty=3: target=10~15 (7~10회 완료)\n"
+    "- target: 실제 목표값 (count → 목표 횟수, amount → 목표 절약 금액(원))\n"
     "- estimated_saving: 챌린지 완수 시 예상 절약 금액 (원)\n"
     f"- {_TICKER_HINT}\n"
-    "- 소비 비중 1위 카테고리 기준, difficulty=2로 시작"
+    "- 소비 비중 1위 카테고리 기준으로 제안"
 )
 
 # ── 조정 ─────────────────────────────────────────────────────────────────────
@@ -58,12 +55,12 @@ _ADJUST_SYSTEM = (
     "당신은 개인 재무 관리 AI 어시스턴트 Pori입니다.\n"
     "사용자 피드백에 맞게 챌린지를 조정하거나 새 챌린지를 제안합니다.\n\n"
     "반드시 아래 JSON 형식으로만 응답하세요 (마크다운 코드블록 없이):\n"
-    '{"icon":"☕","title":"카페 3번 줄이기","description":"조금 더 쉽게, 3번만 참아봐요!","difficulty":1,'
+    '{"title":"카페 3번 줄이기","description":"조금 더 쉽게, 3번만 참아봐요!",'
     '"challenge_type":"count","target":3,"category":"카페","estimated_saving":12000,"ticker":"005930.KS"}\n\n'
     "필드 규칙:\n"
     "- target: 실제 목표값 (count → 목표 횟수, amount → 목표 절약 금액(원))\n"
-    "- feedback=lower: 같은 카테고리, 더 쉬운 버전 (target 줄이기, difficulty 낮추기)\n"
-    "- feedback=higher: 같은 카테고리, 더 어려운 버전 (target 늘리기, difficulty 높이기)\n"
+    "- feedback=lower: 같은 카테고리, 더 쉬운 버전 (target 줄이기)\n"
+    "- feedback=higher: 같은 카테고리, 더 어려운 버전 (target 늘리기)\n"
     "- feedback=different: 완전히 다른 카테고리 기반 새 챌린지\n"
     "- previous_proposals에 있는 챌린지 절대 반복 금지\n"
     f"- {_TICKER_HINT}"
@@ -100,11 +97,12 @@ def _ticker(data: dict, category: str) -> str:
 
 async def propose_mini_challenge(req: MiniChallengeRequest) -> MiniChallengeResponse:
     cats = "\n".join(
-        f"- {c.name}: {c.expense:,}원"
-        for c in sorted(req.category_expense, key=lambda x: x.expense, reverse=True)
+        f"- {c.category}: {c.amount:,}원"
+        for c in sorted(req.category_expense, key=lambda x: x.amount, reverse=True)
     ) or "소비 데이터 없음"
 
-    context = f"투자 성향: {req.porti_type} — {req.porti_comment}\n\n이번 달 소비 패턴:\n{cats}"
+    themes_text = ", ".join(req.stock_themes) if req.stock_themes else "없음"
+    context = f"관심 주식 테마: {themes_text}\n\n이번 달 소비 패턴:\n{cats}"
 
     llm = get_llm(temperature=0.7)
     resp = await llm.ainvoke([SystemMessage(content=_INIT_SYSTEM), HumanMessage(content=context)])
@@ -113,10 +111,8 @@ async def propose_mini_challenge(req: MiniChallengeRequest) -> MiniChallengeResp
     category = data.get("category", "")
     return MiniChallengeResponse(
         created_at=datetime.now(timezone.utc),
-        icon=data["icon"],
         title=data["title"],
         description=data.get("description", ""),
-        difficulty=int(data["difficulty"]),
         category=category,
         target=int(data["target"]),
         challenge_type=data.get("challenge_type", "count"),
@@ -127,14 +123,14 @@ async def propose_mini_challenge(req: MiniChallengeRequest) -> MiniChallengeResp
 
 async def adjust_challenge(req: AdjustRequest) -> AdjustResponse:
     cats = "\n".join(
-        f"- {c.name}: {c.expense:,}원"
-        for c in sorted(req.category_expense, key=lambda x: x.expense, reverse=True)
+        f"- {c.category}: {c.amount:,}원"
+        for c in sorted(req.category_expense, key=lambda x: x.amount, reverse=True)
     ) or "소비 데이터 없음"
 
     prev_text = ""
     if req.previous_proposals:
         prev_text = "\n\n이미 제안한 챌린지 (반복 금지):\n" + "\n".join(
-            f"- [{p.challenge_type}] {p.title} (난이도:{p.difficulty}, 카테고리:{p.category})"
+            f"- [{p.challenge_type}] {p.title} (카테고리:{p.category}, 피드백:{p.feedback})"
             for p in req.previous_proposals
         )
 
@@ -143,9 +139,11 @@ async def adjust_challenge(req: AdjustRequest) -> AdjustResponse:
         "higher": "같은 카테고리에서 더 어려운 버전으로 조정해주세요.",
         "different": "완전히 다른 카테고리 기반으로 새 챌린지를 제안해주세요.",
     }
-    fb_text = f"\n\n사용자 요청: {feedback_map.get(req.feedback or '', '')}" if req.feedback else ""
+    last_feedback = req.previous_proposals[-1].feedback if req.previous_proposals else ""
+    fb_text = f"\n\n사용자 요청: {feedback_map.get(last_feedback, '')}" if last_feedback else ""
 
-    context = f"이번 달 소비 패턴:\n{cats}{prev_text}{fb_text}"
+    themes_text = ", ".join(req.stock_themes) if req.stock_themes else "없음"
+    context = f"관심 주식 테마: {themes_text}\n\n이번 달 소비 패턴:\n{cats}{prev_text}{fb_text}"
 
     llm = get_llm(temperature=0.7)
     resp = await llm.ainvoke([SystemMessage(content=_ADJUST_SYSTEM), HumanMessage(content=context)])
@@ -155,9 +153,7 @@ async def adjust_challenge(req: AdjustRequest) -> AdjustResponse:
     target_val = data.get("target")
     return AdjustResponse(
         created_at=datetime.now(timezone.utc),
-        icon=data["icon"],
         title=data["title"],
-        difficulty=int(data["difficulty"]),
         challenge_type=data.get("challenge_type", "count"),
         target=int(target_val) if target_val is not None else None,
         category=category,

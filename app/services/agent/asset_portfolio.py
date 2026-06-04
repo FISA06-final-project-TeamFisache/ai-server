@@ -22,7 +22,7 @@ from app.schemas.portfolio import (
     InvestmentPlan,
     PortfolioItem,
 )
-from app.services.agent.llm import invoke_structured
+from app.services.agent.llm import get_llm, invoke_structured
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +226,7 @@ async def _define_flows(state: AssetPortfolioState) -> AssetPortfolioState:
         llm_map = {}
 
     # ratio 합계가 100이 아니면 균등 분배로 fallback
-    raw_ratios = [int(llm_map.get(s["flow_type"], {}).get("ratio") or 25) for s in _FLOW_SPECS]
+    raw_ratios = [int(float(llm_map.get(s["flow_type"], {}).get("ratio") or 25)) for s in _FLOW_SPECS]
     total_ratio = sum(raw_ratios)
     if total_ratio != 100:
         raw_ratios = [25, 25, 25, 25]
@@ -513,10 +513,11 @@ def _calculate(state: AssetPortfolioState) -> AssetPortfolioState:
         return None
 
     # ratio 합계가 100이 아니면 균등 재분배 (검증 실패 후 max retry 도달 시 안전망)
-    total_ratio = sum(max(1, int(f.get("ratio", 0))) for f in flows_raw[:4])
+    flow_defs_list = state["flow_defs"]
+    total_ratio = sum(max(1, int(f.get("ratio", 0))) for f in flow_defs_list[:4])
     if total_ratio != 100:
         per = 100 // 4
-        for i, f in enumerate(flows_raw[:4]):
+        for i, f in enumerate(flow_defs_list[:4]):
             f["ratio"] = per + (100 - per * 4 if i == 0 else 0)
 
     investment_flows = []
@@ -670,8 +671,6 @@ async def recommend_asset_portfolio(request: AssetPortfolioRequest) -> AssetPort
         "flow_products": [],
         "reflection": {},
         "investment_flows": [],
-        "retry_count":   0,
-        "feedback":      "",
     }
 
     final_state: AssetPortfolioState = await _graph.ainvoke(initial_state)

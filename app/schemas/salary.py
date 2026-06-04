@@ -3,10 +3,13 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+class CategoryExpenseItem(BaseModel):
+    name: str
+    expense: int
 
 class PortfolioItem(BaseModel):
     asset_id: UUID
-    category: str
+    account_purpose: str
     amount: int
 
 class FlowItem(BaseModel):
@@ -20,6 +23,7 @@ class FlowItem(BaseModel):
 class SalaryRequest(BaseModel):
     user_id: UUID
     salary_diff: int
+    category_expense: list[CategoryExpenseItem]
     portfolio_items: list[PortfolioItem]
     flow_items: list[FlowItem]
 

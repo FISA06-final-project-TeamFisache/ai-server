@@ -32,23 +32,18 @@ def _fetch_market_news() -> str:
 class ReportState(TypedDict):
     year: int
     month: int
-    title: str
-    target_amount: int
-    goal_progress: int
-    deadline_info: str
+    mini_challenges_summary: str
     income_summary: str
     expense_summary: str
-    expense_categories: list[str]  # 실제 지출 카테고리 목록
+    expense_categories: list[str]
     asset_trend: str
     market_news: str
     strategy_raw: str
     trend_comment: str
-    event_comment: str
+    challenge_comment: str
     market_condition: str
     hover_descriptions: list[dict]
     guideline: str
-    performance_status: str
-    performance_comment: str
 
 
 def _analyze_report(state: ReportState) -> ReportState:
@@ -68,19 +63,16 @@ def _analyze_report(state: ReportState) -> ReportState:
             "반드시 아래 JSON만 응답하세요:\n"
             "{\n"
             '  "trend_comment": "전월 대비 자산/소비 변화 한 줄 분석",\n'
-            '  "event_comment": "목표 달성률 기반 한 줄 코멘트",\n'
+            '  "challenge_comment": "미니 챌린지 달성 현황 기반 한 줄 코멘트",\n'
             '  "market_condition": "시장 뉴스 기반 한 줄 요약 (뉴스 없으면 사용자 자산 흐름 기반으로 작성)",\n'
             '  "hover_descriptions": [{"category": "실제 지출 카테고리명", "content": "한 줄 설명"}],\n'
             '  "guideline": "다음 달 소비/저축 가이드라인 한 줄",\n'
-            '  "performance_status": "OUTPERFORM 또는 UNDERPERFORM 또는 ON_TRACK",\n'
-            '  "performance_comment": "성과 한 줄 코멘트"\n'
             "}\n\n"
             "hover_descriptions는 반드시 아래 실제 지출 카테고리만 사용하세요."
         )),
         HumanMessage(content=(
-            f"{state['year']}년 {state['month']}월 리포트\n"
-            f"이벤트 목표: {state['title']} / 목표금액: {state['target_amount']:,}원 / "
-            f"달성률: {state['goal_progress']}% / 마감: {state['deadline_info']}\n\n"
+            f"{state['year']}년 {state['month']}월 리포트\n\n"
+            f"미니 챌린지 현황:\n{state['mini_challenges_summary']}\n\n"
             f"자산 변화:\n{state['asset_trend']}\n\n"
             f"이번 달 수입 요약:\n{state['income_summary']}\n\n"
             f"이번 달 지출 요약 (hover_descriptions 카테고리는 아래 항목만 사용):\n{state['expense_summary']}"
@@ -112,7 +104,7 @@ def _parse_report(state: ReportState) -> ReportState:
     return {
         **state,
         "trend_comment": data.get("trend_comment", "전월 대비 자산 변화를 분석했어요."),
-        "event_comment": data.get("event_comment", f"목표 달성률 {state['goal_progress']}%예요."),
+        "challenge_comment": data.get("challenge_comment", "이번 달 챌린지 현황을 확인했어요."),
         "market_condition": data.get("market_condition", "시장 데이터를 불러올 수 없었어요."),
         "hover_descriptions": hover,
         "guideline": data.get("guideline", "다음 달도 꾸준한 저축을 이어가세요."),
@@ -135,7 +127,6 @@ _graph = _build_graph()
 
 
 async def generate_report(request: ReportRequest) -> ReportResponse:
-    # 저축·투자성 이체는 지출이 아니므로 제외
     NON_EXPENSE_CATEGORIES = {"저축", "투자", "이체", "자동이체", "적금"}
 
     # 수입/지출 분리 집계
@@ -175,28 +166,22 @@ async def generate_report(request: ReportRequest) -> ReportResponse:
     else:
         asset_trend = "  자산 스냅샷 없음"
 
-    # 마감까지 남은 기간 계산
-    now = datetime.now(timezone.utc)
-    deadline = request.deadline if request.deadline.tzinfo else request.deadline.replace(tzinfo=timezone.utc)
-    days_left = (deadline - now).days
-    if days_left < 0:
-        deadline_info = f"{deadline.strftime('%Y-%m-%d')} (마감 {abs(days_left)}일 초과)"
-    elif days_left < 30:
-        deadline_info = f"{deadline.strftime('%Y-%m-%d')} ({days_left}일 후)"
+    # 미니 챌린지 요약
+    if request.mini_challenges:
+        mini_challenges_summary = "\n".join(
+            f"  - [{c.status}] {c.title} ({c.challenge_type}, 목표 {c.target})"
+            + (f" — 완료: {c.completed_at.strftime('%Y-%m-%d')}" if c.completed_at else "")
+            for c in request.mini_challenges
+        )
     else:
-        months_left = round(days_left / 30)
-        deadline_info = f"{deadline.strftime('%Y-%m-%d')} (약 {months_left}개월 후)"
+        mini_challenges_summary = "  챌린지 없음"
 
-    # 시장 뉴스 검색 (Tavily)
     market_news = _fetch_market_news()
 
     initial_state: ReportState = {
         "year": request.year,
         "month": request.month,
-        "title": request.title,
-        "target_amount": request.target_amount,
-        "goal_progress": request.goal_progress,
-        "deadline_info": deadline_info,
+        "mini_challenges_summary": mini_challenges_summary,
         "expense_categories": list(expense_by_category.keys()),
         "income_summary": income_summary,
         "expense_summary": expense_summary,
@@ -204,7 +189,7 @@ async def generate_report(request: ReportRequest) -> ReportResponse:
         "market_news": market_news,
         "strategy_raw": "",
         "trend_comment": "",
-        "event_comment": "",
+        "challenge_comment": "",
         "market_condition": "",
         "hover_descriptions": [],
         "guideline": "",
@@ -228,10 +213,8 @@ async def generate_report(request: ReportRequest) -> ReportResponse:
     return ReportResponse(
         created_at=datetime.now(timezone.utc),
         trend_comment=final_state["trend_comment"],
-        event_comment=final_state["event_comment"],
+        challenge_comment=final_state["challenge_comment"],
         market_condition=final_state["market_condition"],
         hover_description=valid_hover,
         guideline=final_state["guideline"],
-        performance_status=final_state["performance_status"],
-        performance_comment=final_state["performance_comment"],
     )
