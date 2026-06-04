@@ -8,6 +8,7 @@ from uuid import UUID
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
+from pydantic import BaseModel, Field
 
 from app.core.config import settings
 from dotenv import load_dotenv
@@ -21,7 +22,7 @@ from app.schemas.portfolio import (
     InvestmentPlan,
     PortfolioItem,
 )
-from app.services.agent.llm import get_llm
+from app.services.agent.llm import invoke_structured
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,7 @@ _FLOW_SPECS = [
     },
 ]
 
+# ── State ─────────────────────────────────────────────────────────────────────
 
 class AssetPortfolioState(TypedDict):
     invest_amount: int
@@ -83,6 +85,7 @@ class AssetPortfolioState(TypedDict):
     reflection: dict
     investment_flows: list[dict]
 
+# ── 노드 ──────────────────────────────────────────────────────────────────────
 
 # ── 임베딩 ─────────────────────────────────────────────────────────────────────
 
@@ -501,6 +504,21 @@ def _calculate(state: AssetPortfolioState) -> AssetPortfolioState:
     flow_accounts_map = {fa["flow_type"]: fa for fa in state["flow_accounts"]}
     flow_products_map = {fp["flow_type"]: fp["portfolio"] for fp in state["flow_products"]}
 
+    def resolve_product_name(ai_name: str) -> str | None:
+        if ai_name in product_by_name:
+            return ai_name
+        for db_name in product_by_name:
+            if ai_name in db_name or db_name in ai_name:
+                return db_name
+        return None
+
+    # ratio 합계가 100이 아니면 균등 재분배 (검증 실패 후 max retry 도달 시 안전망)
+    total_ratio = sum(max(1, int(f.get("ratio", 0))) for f in flows_raw[:4])
+    if total_ratio != 100:
+        per = 100 // 4
+        for i, f in enumerate(flows_raw[:4]):
+            f["ratio"] = per + (100 - per * 4 if i == 0 else 0)
+
     investment_flows = []
     for spec in _FLOW_SPECS:
         ft = spec["flow_type"]
@@ -629,12 +647,8 @@ _graph = _build_graph()
 
 async def recommend_asset_portfolio(request: AssetPortfolioRequest) -> AssetPortfolioResponse:
     asset_list = [
-        {
-            "asset_id": str(a.asset_id),
-            "asset_type": a.asset_type,
-            "account_name": a.account_name,
-            "balance": a.balance,
-        }
+        {"asset_id": str(a.asset_id), "asset_type": a.asset_type,
+         "account_name": a.account_name, "balance": a.balance}
         for a in request.invest_assets
     ]
 
@@ -656,6 +670,8 @@ async def recommend_asset_portfolio(request: AssetPortfolioRequest) -> AssetPort
         "flow_products": [],
         "reflection": {},
         "investment_flows": [],
+        "retry_count":   0,
+        "feedback":      "",
     }
 
     final_state: AssetPortfolioState = await _graph.ainvoke(initial_state)
