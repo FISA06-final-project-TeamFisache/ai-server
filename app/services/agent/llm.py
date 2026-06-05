@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
 from typing import TYPE_CHECKING, TypeVar
 
@@ -8,11 +10,13 @@ from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
-from app.core.config import settings
-from dotenv import load_dotenv
+from app.core import config
 
-load_dotenv()
-import os
+logger = logging.getLogger(__name__)
+
+openrouter_api_key: str = os.environ.get("OPENROUTER_API_KEY", "")
+openrouter_base_url: str = os.environ.get("OPENROUTER_BASE_URL", config.OPENROUTER_BASE_URL)
+
 _OPENROUTER_HEADERS = {
     "HTTP-Referer": "https://github.com/wooriport",
     "X-Title": "WooriPort AI Server",
@@ -23,10 +27,10 @@ T = TypeVar("T", bound=BaseModel)
 
 def get_llm(temperature: float | None = None) -> ChatOpenAI:
     return ChatOpenAI(
-        model=os.environ.get("LLM_MODEL"),
-        temperature=temperature if temperature is not None else float(os.environ.get("LLM_TEMPERATURE", 0.7)),
-        openai_api_key=os.environ.get("OPENROUTER_API_KEY"),
-        openai_api_base=os.environ.get("OPENROUTER_BASE_URL"),
+        model=os.environ.get("LLM_MODEL", "gpt-4o"),
+        temperature=temperature if temperature is not None else float(os.environ.get("LLM_TEMPERATURE", config.LLM_TEMPERATURE)),
+        openai_api_key=openrouter_api_key,
+        openai_api_base=openrouter_base_url,
         default_headers=_OPENROUTER_HEADERS,
         max_tokens=4096,
     )
@@ -45,8 +49,8 @@ def invoke_structured(
         result = llm.with_structured_output(schema).invoke(messages)
         if isinstance(result, schema):
             return result
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("structured output 1차 시도 실패: %s", e)
 
     # 2차: 일반 텍스트 응답 → regex JSON 파싱 → Pydantic 검증
     try:
@@ -54,8 +58,8 @@ def invoke_structured(
         match = re.search(r"\{.*\}", raw, re.DOTALL)
         if match:
             return schema.model_validate(json.loads(match.group()))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("structured output 2차 시도 실패: %s", e)
 
     return None
 
@@ -79,8 +83,8 @@ async def ainvoke_structured(
         result = await llm.with_structured_output(schema).ainvoke(messages)
         if isinstance(result, schema):
             return result
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("structured output 1차 시도 실패: %s", e)
 
     # 2차: 일반 텍스트 응답 → regex JSON 파싱 → Pydantic 검증
     try:
@@ -88,7 +92,7 @@ async def ainvoke_structured(
         match = re.search(r"\{.*\}", raw, re.DOTALL)
         if match:
             return schema.model_validate(json.loads(match.group()))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("structured output 2차 시도 실패: %s", e)
 
     return None

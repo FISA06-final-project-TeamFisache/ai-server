@@ -34,7 +34,7 @@ _SALARY_SYSTEM = (
     '"salary_allocations":[{"purpose":"생활비","plannedAmount":1500000,"ratio":50}],"portfolio":[]}\n\n'
     "규칙:\n"
     "- 모든 ratio 합계 = 100\n"
-    "- plannedAmount = 월 소득 × (ratio / 100), 원 단위 반올림\n"
+    "- plannedAmount = 월 소득 x (ratio / 100), 원 단위 반올림\n"
     "- 생활비·저축·투자·목표 적금 등 현실적 항목으로 구성 (3~5개)"
 )
 
@@ -88,7 +88,6 @@ async def analyze_goal(req: ResetAnalyzeRequest) -> ResetAnalyzeResponse:
     result = await ainvoke_structured(
         [SystemMessage(content=_ANALYZE_SYSTEM), HumanMessage(content=context)],
         _AnalyzeAI,
-        temperature=0.3,
         max_tokens=256,
     )
     if result is None:
@@ -107,7 +106,6 @@ async def propose_reset(req: ResetProposeRequest) -> ResetProposeResponse:
     result = await ainvoke_structured(
         [SystemMessage(content=system), HumanMessage(content=context)],
         _ProposeAI,
-        temperature=0.5,
         max_tokens=512,
     )
     if result is None:

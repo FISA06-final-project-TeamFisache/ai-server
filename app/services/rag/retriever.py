@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 
+from app.services.rag.db import get_pool
 from app.services.rag.knowledge import FINANCIAL_KNOWLEDGE
 
 logger = logging.getLogger(__name__)
@@ -38,8 +39,6 @@ async def get_products_context(
     DB에서 상품을 조회해 프롬프트용 문자열로 반환한다.
     DB 연결이 없거나 실패하면 빈 문자열을 반환해 에이전트가 계속 동작하도록 한다.
     """
-    from app.services.rag.db import get_pool
-
     pool = await get_pool()
     if pool is None:
         return ""
@@ -94,8 +93,6 @@ async def get_products_list(
     limit: int = 30,
 ) -> list[dict]:
     """DB에서 상품을 조회해 dict 리스트로 반환한다."""
-    from app.services.rag.db import get_pool
-
     pool = await get_pool()
     if pool is None:
         return []

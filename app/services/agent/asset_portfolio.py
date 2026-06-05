@@ -1,20 +1,17 @@
 import json
 import logging
 import math
-import re
+import os
 from datetime import datetime, timezone
 from typing import TypedDict
 from uuid import UUID
 
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_openai import OpenAIEmbeddings
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from app.core.config import settings
-from dotenv import load_dotenv
-
-load_dotenv()
-import os
 from app.schemas.portfolio import (
     AssetPortfolioRequest,
     AssetPortfolioResponse,
@@ -22,11 +19,12 @@ from app.schemas.portfolio import (
     InvestmentPlan,
     PortfolioItem,
 )
-from app.services.agent.llm import get_llm, invoke_structured
+from app.services.agent.llm import ainvoke_structured
+from app.services.rag.db import get_pool
 
 logger = logging.getLogger(__name__)
 
-_EMBED_MODEL = "nvidia/llama-nemotron-embed-vl-1b-v2:free"
+_EMBED_MODEL = "text-embedding-3-small"
 
 _INVEST_PRODUCT_TYPES = ["STOCK", "ETF", "BOND"]
 _GATHER_PRODUCT_TYPES = ["CHECKING", "PARKING", "CMA", "SAVING", "DEPOSIT", "ISA", "IRP", "PENSION_SAVINGS"]
@@ -64,12 +62,46 @@ _FLOW_SPECS = [
     },
 ]
 
+# ── 내부 AI 출력 스키마 ───────────────────────────────────────────────────────
+
+class _FlowItem(BaseModel):
+    flow_type: str
+    title: str
+    summary: str
+    ratio: int
+
+
+class _FlowsAIOutput(BaseModel):
+    flows: list[_FlowItem]
+
+
+class _AIPortfolioItem(BaseModel):
+    name: str
+    ratio: int
+    comment: str
+
+
+class _FlowProductItem(BaseModel):
+    flow_type: str
+    portfolio: list[_AIPortfolioItem]
+
+
+class _ProductsAIOutput(BaseModel):
+    flow_products: list[_FlowProductItem]
+
+
+class _ReflectionAIOutput(BaseModel):
+    is_valid: bool
+    issues: list[str]
+    suggestions: list[str]
+
+
 # ── State ─────────────────────────────────────────────────────────────────────
 
 class AssetPortfolioState(TypedDict):
     invest_amount: int
     interest: str
-    invest_interest: list[str]
+    invest_interests: list[str]
     porti_type: str
     porti_comment: str
     asset_list: list[dict]
@@ -90,18 +122,10 @@ class AssetPortfolioState(TypedDict):
 # ── 임베딩 ─────────────────────────────────────────────────────────────────────
 
 async def _get_embedding(text: str) -> list[float] | None:
-    if not os.environ.get("OPENROUTER_API_KEY") or not text.strip():
+    if not text.strip():
         return None
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                f"{os.environ.get('OPENROUTER_BASE_URL')}/embeddings",
-                headers={"Authorization": f"Bearer {os.environ.get('OPENROUTER_API_KEY')}"},
-                json={"model": _EMBED_MODEL, "input": text},
-            )
-            resp.raise_for_status()
-            return resp.json()["data"][0]["embedding"]
+        return await OpenAIEmbeddings(model=_EMBED_MODEL).aembed_query(text)
     except Exception as e:
         logger.warning("임베딩 생성 실패: %s", e)
         return None
@@ -110,13 +134,11 @@ async def _get_embedding(text: str) -> list[float] | None:
 # ── Node: preprocess ──────────────────────────────────────────────────────────
 
 async def _preprocess(state: AssetPortfolioState) -> AssetPortfolioState:
-    from app.services.rag.db import get_pool
-
     asset_by_type: dict[str, list[dict]] = {}
     for a in state["asset_list"]:
         asset_by_type.setdefault(a["asset_type"], []).append(a)
 
-    query_parts = list(state["invest_interest"]) + ([state["interest"]] if state["interest"] else [])
+    query_parts = list(state["invest_interests"]) + ([state["interest"]] if state["interest"] else [])
     query_vector = await _get_embedding(" ".join(query_parts))
 
     pool = await get_pool()
@@ -184,7 +206,6 @@ async def _preprocess(state: AssetPortfolioState) -> AssetPortfolioState:
 # ── Node: define_flows ────────────────────────────────────────────────────────
 
 async def _define_flows(state: AssetPortfolioState) -> AssetPortfolioState:
-    llm = get_llm(temperature=0.3)
     messages = [
         SystemMessage(content=(
             "당신은 개인 자산관리 전문가입니다.\n"
@@ -212,17 +233,15 @@ async def _define_flows(state: AssetPortfolioState) -> AssetPortfolioState:
             f"PorTI 유형: {state['porti_type']}\n"
             f"투자 성향: {state['porti_comment']}\n"
             f"관심사: {state['interest']}\n"
-            f"투자 관심 분야: {', '.join(state['invest_interest']) or '없음'}\n"
+            f"투자 관심 분야: {', '.join(state['invest_interests']) or '없음'}\n"
             f"월 투자금: {state['invest_amount']:,}원"
         )),
     ]
-    result = await llm.ainvoke(messages)
+    ai_result = await ainvoke_structured(messages, _FlowsAIOutput)
 
-    try:
-        match = re.search(r"\{.*\}", result.content, re.DOTALL)
-        data = json.loads(match.group()) if match else {}
-        llm_map = {f["flow_type"]: f for f in data.get("flows", [])}
-    except Exception:
+    if ai_result:
+        llm_map = {f.flow_type: {"title": f.title, "summary": f.summary, "ratio": f.ratio} for f in ai_result.flows}
+    else:
         llm_map = {}
 
     # ratio 합계가 100이 아니면 균등 분배로 fallback
@@ -321,10 +340,10 @@ def _select_accounts(state: AssetPortfolioState) -> AssetPortfolioState:
 
 async def _search_trends(state: AssetPortfolioState) -> AssetPortfolioState:
     trend_context = ""
-    if os.environ.get("TAVILY_API_KEY"):
+    tavily_api_key = os.environ.get("TAVILY_API_KEY", "")
+    if tavily_api_key:
         try:
-            from langchain_community.tools.tavily_search import TavilySearchResults
-            tool = TavilySearchResults(max_results=3, tavily_api_key=os.environ.get("TAVILY_API_KEY"))
+            tool = TavilySearchResults(max_results=3, tavily_api_key=tavily_api_key)
             results = await tool.ainvoke({"query": "2025 ETF 채권 투자 트렌드 한국 추천"})
             if isinstance(results, list):
                 trend_context = "\n".join(
@@ -338,8 +357,6 @@ async def _search_trends(state: AssetPortfolioState) -> AssetPortfolioState:
 # ── Node: select_products ─────────────────────────────────────────────────────
 
 async def _select_products(state: AssetPortfolioState) -> AssetPortfolioState:
-    llm = get_llm(temperature=0.3)
-
     can_invest_map = {fa["flow_type"]: fa["can_invest"] for fa in state["flow_accounts"]}
     invest_flows = [fd for fd in state["flow_defs"] if can_invest_map.get(fd["flow_type"])]
 
@@ -377,16 +394,14 @@ async def _select_products(state: AssetPortfolioState) -> AssetPortfolioState:
         HumanMessage(content=(
             f"PorTI: {state['porti_type']} / {state['porti_comment']}\n"
             f"관심사: {state['interest']}\n"
-            f"투자 관심 분야: {', '.join(state['invest_interest']) or '없음'}"
+            f"투자 관심 분야: {', '.join(state['invest_interests']) or '없음'}"
         )),
     ]
-    result = await llm.ainvoke(messages)
+    ai_result = await ainvoke_structured(messages, _ProductsAIOutput)
 
-    try:
-        match = re.search(r"\{.*\}", result.content, re.DOTALL)
-        data = json.loads(match.group()) if match else {}
-        llm_map = {fp["flow_type"]: fp["portfolio"] for fp in data.get("flow_products", [])}
-    except Exception:
+    if ai_result:
+        llm_map = {fp.flow_type: [{"name": p.name, "ratio": p.ratio, "comment": p.comment} for p in fp.portfolio] for fp in ai_result.flow_products}
+    else:
         llm_map = {}
 
     flow_products = [
@@ -403,8 +418,6 @@ async def _select_products(state: AssetPortfolioState) -> AssetPortfolioState:
 # ── Node: reflect ─────────────────────────────────────────────────────────────
 
 async def _reflect(state: AssetPortfolioState) -> AssetPortfolioState:
-    llm = get_llm(temperature=0.1)
-
     valid_names = {p["name"] for p in state["top_invest_products"]}
     lines = []
     for fp in state["flow_products"]:
@@ -434,25 +447,19 @@ async def _reflect(state: AssetPortfolioState) -> AssetPortfolioState:
             + "\n".join(lines)
         )),
     ]
-    result = await llm.ainvoke(messages)
+    ai_result = await ainvoke_structured(messages, _ReflectionAIOutput)
 
-    try:
-        match = re.search(r"\{.*\}", result.content, re.DOTALL)
-        data = json.loads(match.group()) if match else {}
-    except Exception:
-        data = {}
+    if ai_result:
+        reflection = {"is_valid": ai_result.is_valid, "issues": ai_result.issues, "suggestions": ai_result.suggestions}
+    else:
+        reflection = {"is_valid": True, "issues": [], "suggestions": []}
 
-    return {**state, "reflection": {
-        "is_valid": data.get("is_valid", True),
-        "issues": data.get("issues", []),
-        "suggestions": data.get("suggestions", []),
-    }}
+    return {**state, "reflection": reflection}
 
 
 # ── Node: refine ──────────────────────────────────────────────────────────────
 
 async def _refine(state: AssetPortfolioState) -> AssetPortfolioState:
-    llm = get_llm(temperature=0.3)
     reflection = state["reflection"]
 
     current_json = json.dumps(
@@ -471,13 +478,11 @@ async def _refine(state: AssetPortfolioState) -> AssetPortfolioState:
         )),
         HumanMessage(content=f"현재 포트폴리오:\n{current_json}"),
     ]
-    result = await llm.ainvoke(messages)
+    ai_result = await ainvoke_structured(messages, _ProductsAIOutput)
 
-    try:
-        match = re.search(r"\{.*\}", result.content, re.DOTALL)
-        data = json.loads(match.group()) if match else {}
-        refined_map = {fp["flow_type"]: fp["portfolio"] for fp in data.get("flow_products", [])}
-    except Exception:
+    if ai_result:
+        refined_map = {fp.flow_type: [{"name": p.name, "ratio": p.ratio, "comment": p.comment} for p in fp.portfolio] for fp in ai_result.flow_products}
+    else:
         refined_map = {}
 
     new_flow_products = [
@@ -599,7 +604,7 @@ def _calculate(state: AssetPortfolioState) -> AssetPortfolioState:
 
 def _should_search_trends(state: AssetPortfolioState) -> str:
     has_can_invest = any(fa["can_invest"] for fa in state["flow_accounts"])
-    needs_search = has_can_invest and not state["invest_interest"]
+    needs_search = has_can_invest and not state["invest_interests"]
     return "search_trends" if needs_search else "select_products"
 
 
@@ -656,7 +661,7 @@ async def recommend_asset_portfolio(request: AssetPortfolioRequest) -> AssetPort
     initial_state: AssetPortfolioState = {
         "invest_amount": request.invest_amount,
         "interest": request.interest,
-        "invest_interest": request.invest_interest,
+        "invest_interests": request.invest_interests,
         "porti_type": request.porti_type,
         "porti_comment": request.porti_comment,
         "asset_list": asset_list,

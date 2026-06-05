@@ -48,7 +48,7 @@ class RebalanceRequest(BaseModel):
 class SalaryRebalanceItem(BaseModel):
     asset_id: UUID
     account_purpose: str
-    ratio: int
+    amount: int
     comment: str  # 용도와 금액 산정에 대한 설명
 
 
@@ -72,7 +72,7 @@ class AssetPortfolioRequest(BaseModel):
     user_id: UUID
     invest_amount: int
     interest: str
-    invest_interest: list[str]
+    invest_interests: list[str]
     porti_type: str
     porti_comment: str
     invest_assets: list[AssetItem]

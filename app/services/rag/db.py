@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import logging
+import os
 
 import asyncpg
-
-from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -13,12 +12,13 @@ _pool: asyncpg.Pool | None = None
 
 async def get_pool() -> asyncpg.Pool | None:
     global _pool
-    if not settings.db_url:
+    db_url = os.environ.get("DB_URL", "")
+    if not db_url:
         return None
     if _pool is None:
         try:
             _pool = await asyncpg.create_pool(
-                settings.db_url,
+                db_url,
                 min_size=1,
                 max_size=5,
                 command_timeout=5,

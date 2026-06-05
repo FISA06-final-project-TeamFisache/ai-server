@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import json
-import logging
 from datetime import datetime, timezone
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from pydantic import BaseModel
 
 from app.schemas.mini_challenge import (
     AdjustRequest,
@@ -14,7 +13,9 @@ from app.schemas.mini_challenge import (
     NagRequest,
     NagResponse,
 )
-from app.services.agent.llm import get_llm
+from app.services.agent.llm import ainvoke_structured
+
+import logging
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,43 @@ _TICKER_HINT = (
     "- 현대차: 005380.KS\n- SK하이닉스: 000660.KS\n- TIGER 미국S&P500: 360750.KS\n"
     "카테고리에 가장 어울리는 종목 1개 선택"
 )
+_CHALLENGE_SUB_TYPES = [
+    "COFFEE",      # 카페
+    "DELIVERY",    # 배달 (식비 + 배달앱)
+    "ALCOHOL",     # 술 (식비 + 주점)
+    "LATE_NIGHT",  # 야식 (식비 + 23:00~04:00)
+    "LUNCH",       # 점심 (식비 + 11:00~14:00)
+    "SHOPPING",    # 쇼핑 (쇼핑 + 특정 앱)
+    "TAXI"         # 택시 (교통 + 택시)
+]
+
+# ── 내부 AI 출력 스키마 ───────────────────────────────────────────────────────
+
+class _MiniChallengeAIOutput(BaseModel):
+    title: str
+    description: str
+    challenge_type: str
+    target: int
+    category: str
+    estimated_saving: int
+    ticker: str
+    challenge_sub_type: str
+
+
+class _AdjustAIOutput(BaseModel):
+    title: str
+    description: str
+    challenge_type: str
+    target: int | None
+    category: str
+    estimated_saving: int
+    ticker: str
+    challenge_sub_type: str
+
+
+class _NagAIOutput(BaseModel):
+    nag_message: str
+
 
 # ── 초기 제안 ─────────────────────────────────────────────────────────────────
 
@@ -46,6 +84,8 @@ _INIT_SYSTEM = (
     "- target: 실제 목표값 (count → 목표 횟수, amount → 목표 절약 금액(원))\n"
     "- estimated_saving: 챌린지 완수 시 예상 절약 금액 (원)\n"
     f"- {_TICKER_HINT}\n"
+    "- challenge_sub_type: 챌린지 세부 유형. 반드시 아래 값 중 하나로 지정\n"
+    f"- {', '.join(_CHALLENGE_SUB_TYPES)}\n"
     "- 소비 비중 1위 카테고리 기준으로 제안"
 )
 
@@ -80,18 +120,9 @@ _NAG_SYSTEM = (
 )
 
 
-def _parse(raw: str) -> dict:
-    if "```" in raw:
-        parts = raw.split("```")
-        raw = parts[1] if len(parts) >= 2 else raw
-        raw = raw.lstrip("json").strip()
-    return json.loads(raw)
-
-
-def _ticker(data: dict, category: str) -> str:
-    t = data.get("ticker", "")
-    if t and ".KS" in t:
-        return t
+def _ticker(data_ticker: str, category: str) -> str:
+    if data_ticker and ".KS" in data_ticker:
+        return data_ticker
     return next((v for k, v in _TICKER_MAP.items() if k in category), _DEFAULT_TICKER)
 
 
@@ -104,20 +135,32 @@ async def propose_mini_challenge(req: MiniChallengeRequest) -> MiniChallengeResp
     themes_text = ", ".join(req.stock_themes) if req.stock_themes else "없음"
     context = f"관심 주식 테마: {themes_text}\n\n이번 달 소비 패턴:\n{cats}"
 
-    llm = get_llm(temperature=0.7)
-    resp = await llm.ainvoke([SystemMessage(content=_INIT_SYSTEM), HumanMessage(content=context)])
-    data = _parse(resp.content.strip())
+    messages = [SystemMessage(content=_INIT_SYSTEM), HumanMessage(content=context)]
+    result = await ainvoke_structured(messages, _MiniChallengeAIOutput)
 
-    category = data.get("category", "")
+    if result:
+        return MiniChallengeResponse(
+            created_at=datetime.now(timezone.utc),
+            title=result.title,
+            description=result.description,
+            category=result.category,
+            target=result.target,
+            challenge_type=result.challenge_type,
+            estimated_saving=result.estimated_saving,
+            ticker=_ticker(result.ticker, result.category),
+            challenge_sub_type=result.challenge_sub_type,
+        )
+
     return MiniChallengeResponse(
         created_at=datetime.now(timezone.utc),
-        title=data["title"],
-        description=data.get("description", ""),
-        category=category,
-        target=int(data["target"]),
-        challenge_type=data.get("challenge_type", "count"),
-        estimated_saving=int(data.get("estimated_saving", 0)),
-        ticker=_ticker(data, category),
+        title="소비 줄이기",
+        description="이번 달 소비를 한 번 줄여보세요.",
+        category="기타",
+        target=5,
+        challenge_type="count",
+        estimated_saving=0,
+        ticker=_DEFAULT_TICKER,
+        challenge_sub_type="COFFEE",
     )
 
 
@@ -145,21 +188,32 @@ async def adjust_challenge(req: AdjustRequest) -> AdjustResponse:
     themes_text = ", ".join(req.stock_themes) if req.stock_themes else "없음"
     context = f"관심 주식 테마: {themes_text}\n\n이번 달 소비 패턴:\n{cats}{prev_text}{fb_text}"
 
-    llm = get_llm(temperature=0.7)
-    resp = await llm.ainvoke([SystemMessage(content=_ADJUST_SYSTEM), HumanMessage(content=context)])
-    data = _parse(resp.content.strip())
+    messages = [SystemMessage(content=_ADJUST_SYSTEM), HumanMessage(content=context)]
+    result = await ainvoke_structured(messages, _AdjustAIOutput)
 
-    category = data.get("category", "")
-    target_val = data.get("target")
+    if result:
+        return AdjustResponse(
+            created_at=datetime.now(timezone.utc),
+            title=result.title,
+            challenge_type=result.challenge_type,
+            target=result.target,
+            category=result.category,
+            description=result.description,
+            ticker=_ticker(result.ticker, result.category),
+            estimated_saving=result.estimated_saving,
+            challenge_sub_type=result.challenge_sub_type,
+        )
+
     return AdjustResponse(
         created_at=datetime.now(timezone.utc),
-        title=data["title"],
-        challenge_type=data.get("challenge_type", "count"),
-        target=int(target_val) if target_val is not None else None,
-        category=category,
-        description=data.get("description", ""),
-        ticker=_ticker(data, category),
-        estimated_saving=int(data.get("estimated_saving", 0)),
+        title="소비 줄이기",
+        challenge_type="count",
+        target=None,
+        category="기타",
+        description="조금 더 쉬운 목표로 다시 도전해보세요.",
+        ticker=_DEFAULT_TICKER,
+        estimated_saving=0,
+        challenge_sub_type="COFFEE",
     )
 
 
@@ -171,7 +225,8 @@ async def generate_nag(req: NagRequest) -> NagResponse:
         f"목표: {target_str}, 현재: {current_str}, 달성률: {req.progress_pct}%"
     )
 
-    llm = get_llm(temperature=0.8)
-    resp = await llm.ainvoke([SystemMessage(content=_NAG_SYSTEM), HumanMessage(content=context)])
-    data = _parse(resp.content.strip())
-    return NagResponse(created_at=datetime.now(timezone.utc), nag_message=data["nag_message"])
+    messages = [SystemMessage(content=_NAG_SYSTEM), HumanMessage(content=context)]
+    result = await ainvoke_structured(messages, _NagAIOutput)
+
+    nag_message = result.nag_message if result else "조금만 더 힘내세요! 거의 다 왔어요."
+    return NagResponse(created_at=datetime.now(timezone.utc), nag_message=nag_message)
