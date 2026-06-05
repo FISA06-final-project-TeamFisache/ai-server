@@ -31,6 +31,7 @@ class MiniChallengeResponse(BaseModel):
     challenge_type: str  # count | amount
     estimated_saving: int
     ticker: str
+    challenge_sub_type: str  # 챌린지 세부 유형 (예: "외식비", "카페비" 등)
 
 
 # ── POST /mini_challenge/adjust ───────────────────────────────────────────────
@@ -45,6 +46,7 @@ class PreviousProposalItem(BaseModel):
     category: str
     estimated_saving: int = Field(default=0, alias="estimatedSaving")
     ticker: str = Field(default="", alias="ticker")
+    challenge_sub_type: str  # 챌린지 세부 유형 (예: "외식비", "카페비" 등)
     feedback: str
 
 
@@ -65,7 +67,7 @@ class AdjustResponse(BaseModel):
     description: str
     ticker: str
     estimated_saving: int
-
+    challenge_sub_type: str  # 챌린지 세부 유형 (예: "외식비", "카페비" 등)
 
 # ── POST /mini_challenge/reward ───────────────────────────────────────────────
 

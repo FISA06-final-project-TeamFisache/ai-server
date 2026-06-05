@@ -19,10 +19,8 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.core.exceptions import register_exception_handlers
 from app.db.connection import close_pool
-from app.routers.challenge import router as challenge_router
 from app.routers.mini_challenge import router as mini_challenge_router
 from app.routers.portfolio import router as portfolio_router
-from app.routers.propose import router as propose_router
 from app.routers.report import router as report_router
 from app.routers.consultant import router as consultant_router
 from app.routers.salary import router as salary_router
@@ -51,10 +49,8 @@ app.add_middleware(
 
 register_exception_handlers(app)
 Instrumentator().instrument(app).expose(app)
-app.include_router(challenge_router)
 app.include_router(mini_challenge_router)
 app.include_router(portfolio_router)
-app.include_router(propose_router)
 app.include_router(report_router)
 app.include_router(consultant_router)
 app.include_router(salary_router)

@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class _AllocationItem(BaseModel):
     asset_id: str = Field(default="", description="보유 계좌 목록에 있는 실제 asset_id")
     account_purpose: str = Field(default="기타", description="배분 용도 한글 레이블 (예: 생활비, 비상금, 용돈)")
-    ratio: int = Field(default=0, description="가처분소득 대비 배분 비율(%, 정수)")
+    amount: int = Field(default=0, description="가처분소득 중 배분할 금액(원)")
     comment: str = Field(default="", description="배분 근거 한 줄 설명")
 
 
@@ -24,7 +24,7 @@ class _RebalancePlan(BaseModel):
     invest_amount: int = Field(default=0, description="투자로 별도 운용할 절대 금액(원)")
     allocations: list[_AllocationItem] = Field(
         default_factory=list,
-        description="나머지 금액을 배분할 계좌 목록 (ratio는 가처분소득 대비 %)",
+        description="나머지 금액을 배분할 계좌 목록 (amount는 가처분소득 대비 금액)",
     )
 
 
@@ -55,17 +55,17 @@ _SYSTEM = (
     "  - asset_id: 보유 계좌 목록의 실제 UUID (절대 변경 금지, 중복 사용 금지)\n"
     "  - account_purpose: 한글 용도명 (생활비, 비상금, 용돈, 교통비, 저축 등)\n"
     "                     ※ CHECKING/SAVINGS 같은 영문 코드 금지, 반드시 한글\n"
-    "  - ratio: 가처분소득 대비 배분 비율(%, 정수)\n"
+    "  - amount: 가처분소득 중 배분할 금액(원)\n"
     "  - comment: 이 계좌에 이 금액을 배분하는 이유 한 줄\n"
-    "- 핵심 제약: invest_amount ÷ 가처분소득 × 100 + sum(ratio) = 100\n"
+    "- 핵심 제약: invest_amount + sum(amount) = 가처분소득\n"
     "- 이모지, 이모티콘 사용 금지\n\n"
     "예시 (가처분소득 3,600,000원 / 균형형):\n"
     '{"invest_amount": 900000, "allocations": [\n'
-    '  {"asset_id": "uuid-A", "account_purpose": "생활비", "ratio": 50, "comment": "식비·생활용품 등 변동 지출 충당"},\n'
-    '  {"asset_id": "uuid-B", "account_purpose": "비상금", "ratio": 15, "comment": "예비 지출 및 비상금 적립"},\n'
-    '  {"asset_id": "uuid-C", "account_purpose": "용돈",   "ratio": 10, "comment": "개인 용돈 및 여가비"}\n'
+    '  {"asset_id": "uuid-A", "account_purpose": "생활비", "amount": 1800000, "comment": "식비·생활용품 등 변동 지출 충당"},\n'
+    '  {"asset_id": "uuid-B", "account_purpose": "비상금", "amount": 540000, "comment": "예비 지출 및 비상금 적립"},\n'
+    '  {"asset_id": "uuid-C", "account_purpose": "용돈",   "amount": 360000, "comment": "개인 용돈 및 여가비"}\n'
     "]}\n"
-    "위 예시에서 invest_amount(25%) + 50% + 15% + 10% = 100%"
+    "위 예시에서 invest_amount(900,000) + 1,800,000 + 540,000 + 360,000 = 3,600,000"
 )
 
 
@@ -90,7 +90,7 @@ def _plan_rebalance(state: RebalanceState) -> RebalanceState:
         )),
     ]
 
-    result = invoke_structured(messages, _RebalancePlan, temperature=0.1)
+    result = invoke_structured(messages, _RebalancePlan)
     if result is None:
         return {**state, "invest_amount": default_invest, "allocations": []}
 
@@ -101,11 +101,11 @@ def _plan_rebalance(state: RebalanceState) -> RebalanceState:
         seen_ids: set[str] = set()
         allocations: list[dict] = []
         for a in result.allocations:
-            if a.asset_id in valid_ids and a.ratio > 0 and a.asset_id not in seen_ids:
+            if a.asset_id in valid_ids and a.amount > 0 and a.asset_id not in seen_ids:
                 allocations.append({
                     "asset_id": a.asset_id,
                     "account_purpose": a.account_purpose,
-                    "ratio": a.ratio,
+                    "amount": a.amount,
                     "comment": a.comment,
                 })
                 seen_ids.add(a.asset_id)
@@ -115,11 +115,11 @@ def _plan_rebalance(state: RebalanceState) -> RebalanceState:
             for i, a in enumerate(result.allocations):
                 if i >= len(state["asset_list"]):
                     break
-                if a.ratio > 0:
+                if a.amount > 0:
                     allocations.append({
                         "asset_id": state["asset_list"][i]["asset_id"],
                         "account_purpose": a.account_purpose,
-                        "ratio": a.ratio,
+                        "amount": a.amount,
                         "comment": a.comment,
                     })
 
@@ -129,23 +129,25 @@ def _plan_rebalance(state: RebalanceState) -> RebalanceState:
         if invest_amount >= spendable:
             invest_amount = default_invest
 
-        # invest_ratio + sum(ratios) = 100 맞추기
-        # invest_ratio를 먼저 확정하고, 남은 %를 allocations에 비례 배분
-        invest_ratio = round(invest_amount / spendable * 100) if spendable > 0 else 25
-        remaining_ratio = 100 - invest_ratio  # allocations이 가져야 할 %
+        remaining_amount = spendable - invest_amount
 
-        total_alloc = sum(a["ratio"] for a in allocations)
-        if total_alloc > 0 and total_alloc != remaining_ratio:
-            scale = remaining_ratio / total_alloc
+        # 현재 allocations의 가중치(기존 비율 혹은 입력된 기준 값) 총합
+        total_weight = sum(a["amount"] for a in allocations)
+        
+        if total_weight > 0 and remaining_amount > 0:
+            # 가중치에 따른 실제 금액 배분 비율
+            scale = remaining_amount / total_weight
             allocations = [
-                {**a, "ratio": max(1, round(a["ratio"] * scale))}
+                # 최소 금액을 0으로 설정하여 음수 방지
+                {**a, "amount": max(0, round(a["amount"] * scale))}
                 for a in allocations
             ]
-            # 반올림 오차 보정: 마지막 항목에 나머지 흡수
-            actual_sum = sum(a["ratio"] for a in allocations)
-            diff = remaining_ratio - actual_sum
+            
+            # 반올림 오차 보정: 총합이 정확히 remaining_amount가 되도록 마지막 항목에 오차 흡수
+            actual_sum = sum(a["amount"] for a in allocations)
+            diff = remaining_amount - actual_sum
             if diff != 0 and allocations:
-                allocations[-1] = {**allocations[-1], "ratio": max(1, allocations[-1]["ratio"] + diff)}
+                allocations[-1] = {**allocations[-1], "amount": max(0, allocations[-1]["amount"] + diff)}
 
         return {**state, "invest_amount": invest_amount, "allocations": allocations}
 
@@ -194,7 +196,7 @@ async def rebalance_salary(request: RebalanceRequest) -> RebalanceResponse:
         SalaryRebalanceItem(
             asset_id=UUID(alloc["asset_id"]),
             account_purpose=alloc["account_purpose"],
-            ratio=int(alloc["ratio"]),
+            amount=int(alloc["amount"]),
             comment=alloc.get("comment", ""),
         )
         for alloc in final_state["allocations"]

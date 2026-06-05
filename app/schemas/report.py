@@ -36,7 +36,7 @@ class ReportRequest(BaseModel):
     user_id: UUID
     year: int
     month: int
-    mini_challenges: list[MiniChallenges]
+    mini_challenges: list[MiniChallenges] | None
     asset_snapshots: list[AssetSnapshot]
     transaction_log: list[TransactionLog]
 

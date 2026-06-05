@@ -8,7 +8,7 @@ from app.services.agent.llm import get_llm
 
 
 async def _generate_expense_comment(porti_type: str, porti_comment: str, expense_summary: str) -> str:
-    llm = get_llm(temperature=0.5)
+    llm = get_llm()
     messages = [
         SystemMessage(content=(
             "당신은 사용자의 소비 패턴을 함께 들여다보는 금융 친구예요.\n"
@@ -29,7 +29,7 @@ async def _generate_expense_comment(porti_type: str, porti_comment: str, expense
 
 
 async def _generate_invest_comment(porti_type: str, asset_summary: str) -> str:
-    llm = get_llm(temperature=0.5)
+    llm = get_llm()
     messages = [
         SystemMessage(content=(
             "당신은 사용자의 투자 현황을 솔직하게 짚어주는 금융 친구예요.\n"

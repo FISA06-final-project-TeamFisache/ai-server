@@ -1,16 +1,15 @@
-import json
 import logging
 import os
-import re
 from datetime import datetime, timezone
 from typing import TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
+from pydantic import BaseModel
 from tavily import TavilyClient
 
 from app.schemas.report import HoverDescription, ReportRequest, ReportResponse
-from app.services.agent.llm import get_llm
+from app.services.agent.llm import invoke_structured
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +33,21 @@ def _fetch_market_news() -> str:
         return ""
 
 
+# ── 내부 AI 출력 스키마 ───────────────────────────────────────────────────────
+
+class _HoverItem(BaseModel):
+    category: str
+    content: str
+
+
+class _ReportAIOutput(BaseModel):
+    trend_comment: str
+    challenge_comment: str
+    market_condition: str
+    hover_descriptions: list[_HoverItem]
+    guideline: str
+
+
 class ReportState(TypedDict):
     year: int
     month: int
@@ -43,7 +57,6 @@ class ReportState(TypedDict):
     expense_categories: list[str]
     asset_trend: str
     market_news: str
-    strategy_raw: str
     trend_comment: str
     challenge_comment: str
     market_condition: str
@@ -52,8 +65,6 @@ class ReportState(TypedDict):
 
 
 def _analyze_report(state: ReportState) -> ReportState:
-    llm = get_llm(temperature=0.3)
-
     market_section = (
         f"\n최신 시장 뉴스:\n{state['market_news']}"
         if state["market_news"]
@@ -71,7 +82,7 @@ def _analyze_report(state: ReportState) -> ReportState:
             '  "challenge_comment": "미니 챌린지 달성 현황 기반 한 줄 코멘트",\n'
             '  "market_condition": "시장 뉴스 기반 한 줄 요약 (뉴스 없으면 사용자 자산 흐름 기반으로 작성)",\n'
             '  "hover_descriptions": [{"category": "실제 지출 카테고리명", "content": "한 줄 설명"}],\n'
-            '  "guideline": "다음 달 소비/저축 가이드라인 한 줄",\n'
+            '  "guideline": "다음 달 소비/저축 가이드라인 한 줄"\n'
             "}\n\n"
             "hover_descriptions는 반드시 아래 실제 지출 카테고리만 사용하세요."
         )),
@@ -84,48 +95,37 @@ def _analyze_report(state: ReportState) -> ReportState:
             f"{market_section}"
         )),
     ]
-    result = llm.invoke(messages)
-    return {**state, "strategy_raw": result.content.strip()}
 
+    result = invoke_structured(messages, _ReportAIOutput)
 
-def _parse_report(state: ReportState) -> ReportState:
-    try:
-        match = re.search(r"\{.*\}", state["strategy_raw"], re.DOTALL)
-        data = json.loads(match.group()) if match else {}
-    except Exception as e:
-        logger.warning("리포트 JSON 파싱 실패: %s", e)
-        data = {}
-
-    status = data.get("performance_status", "ON_TRACK")
-    if status not in {"OUTPERFORM", "UNDERPERFORM", "ON_TRACK"}:
-        status = "ON_TRACK"
-
-    hover = [
-        {"category": h.get("category", "기타"), "content": h.get("content", "")}
-        for h in (data.get("hover_descriptions") or [])
-    ]
-    if not hover:
-        hover = [{"category": "소비", "content": "이번 달 소비 패턴을 분석했어요."}]
+    if result:
+        hover = [{"category": h.category, "content": h.content} for h in result.hover_descriptions]
+        if not hover:
+            hover = [{"category": "소비", "content": "이번 달 소비 패턴을 분석했어요."}]
+        return {
+            **state,
+            "trend_comment": result.trend_comment,
+            "challenge_comment": result.challenge_comment,
+            "market_condition": result.market_condition,
+            "hover_descriptions": hover,
+            "guideline": result.guideline,
+        }
 
     return {
         **state,
-        "trend_comment": data.get("trend_comment", "전월 대비 자산 변화를 분석했어요."),
-        "challenge_comment": data.get("challenge_comment", "이번 달 챌린지 현황을 확인했어요."),
-        "market_condition": data.get("market_condition", "시장 데이터를 불러올 수 없었어요."),
-        "hover_descriptions": hover,
-        "guideline": data.get("guideline", "다음 달도 꾸준한 저축을 이어가세요."),
-        "performance_status": status,
-        "performance_comment": data.get("performance_comment", "이번 달 재무 목표를 잘 유지했어요."),
+        "trend_comment": "전월 대비 자산 변화를 분석했어요.",
+        "challenge_comment": "이번 달 챌린지 현황을 확인했어요.",
+        "market_condition": "시장 데이터를 불러올 수 없었어요.",
+        "hover_descriptions": [{"category": "소비", "content": "이번 달 소비 패턴을 분석했어요."}],
+        "guideline": "다음 달도 꾸준한 저축을 이어가세요.",
     }
 
 
 def _build_graph() -> StateGraph:
     graph = StateGraph(ReportState)
     graph.add_node("analyze", _analyze_report)
-    graph.add_node("parse", _parse_report)
     graph.set_entry_point("analyze")
-    graph.add_edge("analyze", "parse")
-    graph.add_edge("parse", END)
+    graph.add_edge("analyze", END)
     return graph.compile()
 
 
@@ -135,7 +135,6 @@ _graph = _build_graph()
 async def generate_report(request: ReportRequest) -> ReportResponse:
     NON_EXPENSE_CATEGORIES = {"저축", "투자", "이체", "자동이체", "적금"}
 
-    # 수입/지출 분리 집계
     income_by_category: dict[str, int] = {}
     expense_by_category: dict[str, int] = {}
     for tx in request.transaction_log:
@@ -152,7 +151,6 @@ async def generate_report(request: ReportRequest) -> ReportResponse:
         f"  - {cat}: {amt:,}원" for cat, amt in sorted(expense_by_category.items(), key=lambda x: -x[1])
     ) or "  지출 내역 없음"
 
-    # 자산 변화 (savings/invest 분리)
     if len(request.asset_snapshots) >= 2:
         first = request.asset_snapshots[0]
         last = request.asset_snapshots[-1]
@@ -172,7 +170,6 @@ async def generate_report(request: ReportRequest) -> ReportResponse:
     else:
         asset_trend = "  자산 스냅샷 없음"
 
-    # 미니 챌린지 요약
     if request.mini_challenges:
         mini_challenges_summary = "\n".join(
             f"  - [{c.status}] {c.title} ({c.challenge_type}, 목표 {c.target})"
@@ -193,14 +190,11 @@ async def generate_report(request: ReportRequest) -> ReportResponse:
         "expense_summary": expense_summary,
         "asset_trend": asset_trend,
         "market_news": market_news,
-        "strategy_raw": "",
         "trend_comment": "",
         "challenge_comment": "",
         "market_condition": "",
         "hover_descriptions": [],
         "guideline": "",
-        "performance_status": "ON_TRACK",
-        "performance_comment": "",
     }
 
     final_state: ReportState = await _graph.ainvoke(initial_state)

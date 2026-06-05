@@ -1,15 +1,18 @@
-import json
 import logging
-import re
 from datetime import datetime, timezone
 from uuid import UUID
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from pydantic import BaseModel
 
 from app.schemas.salary import SalaryRequest, SalaryResponse, PortfolioItem
-from app.services.agent.llm import get_llm
+from app.services.agent.llm import ainvoke_structured
 
 logger = logging.getLogger(__name__)
+
+
+class _RebalanceCommentOutput(BaseModel):
+    rebalance_comment: str
 
 
 def _calculate_adjusted(current: list[dict], salary_diff: int) -> list[dict]:
@@ -26,7 +29,6 @@ async def _generate_comment(
     after: list[dict],
     category_expense: list,
 ) -> str:
-    llm = get_llm(temperature=0.1)
     direction = "초과" if salary_diff > 0 else "결손"
 
     before_map = {a["account_purpose"]: a["amount"] for a in before}
@@ -56,15 +58,11 @@ async def _generate_comment(
             f"조정 결과:\n{change_summary}"
         )),
     ]
-    result = await llm.ainvoke(messages)
 
-    try:
-        match = re.search(r"\{.*\}", result.content.strip(), re.DOTALL)
-        data = json.loads(match.group()) if match else {}
-        return data.get("rebalance_comment", f"월급 {direction} {abs(salary_diff):,}원을 각 항목에 맞게 조정했어요.")
-    except Exception as e:
-        logger.warning("리밸런싱 코멘트 JSON 파싱 실패: %s", e)
-        return f"월급 {direction} {abs(salary_diff):,}원을 각 항목에 맞게 조정했어요."
+    result = await ainvoke_structured(messages, _RebalanceCommentOutput)
+    if result:
+        return result.rebalance_comment
+    return f"월급 {direction} {abs(salary_diff):,}원을 각 항목에 맞게 조정했어요."
 
 
 async def analyze_salary_rebalance(request: SalaryRequest) -> SalaryResponse:
