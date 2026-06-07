@@ -10,7 +10,7 @@ import redis.asyncio as aioredis
 logger = logging.getLogger(__name__)
 
 _TTL = 7 * 24 * 3600  # 7일
-_KEY_PREFIX = "mini_challenge"
+_KEY_PREFIX = "session"
 
 
 def _make_key(user_id: UUID) -> str:
