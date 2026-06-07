@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from app.schemas.portfolio import RebalanceRequest, RebalanceResponse, SalaryRebalanceItem
 from app.services.agent.llm import get_llm, invoke_structured
+from app.services.agent.porti_types import porti_label
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +49,9 @@ _SYSTEM = (
     "  2단계: 나머지(가처분소득 - invest_amount)를 생활비·비상금 등 항목별로 계좌에 배분합니다.\n\n"
     "규칙:\n"
     "- invest_amount: 투자 운용 절대 금액(원), 가처분소득을 초과할 수 없음\n"
-    "  * 공격형(AGGRESSIVE): 가처분소득의 40~60%\n"
-    "  * 균형형(BALANCED):   가처분소득의 20~35%\n"
-    "  * 안정형(CONSERVATIVE): 가처분소득의 10~20%\n"
+    "  * 투자형 (FENCING·CYCLING): 가처분소득의 40~60%\n"
+    "  * 중립형 (JUDO·RHYTHMIC):   가처분소득의 20~35%\n"
+    "  * 안전형 (SWIMMING·ARCHERY): 가처분소득의 10~20%\n"
     "- allocations: 나머지 가처분소득을 배분할 계좌 목록\n"
     "  - asset_id: 보유 계좌 목록의 실제 UUID (절대 변경 금지, 중복 사용 금지)\n"
     "  - account_purpose: 한글 용도명 (생활비, 비상금, 용돈, 교통비, 저축 등)\n"
@@ -84,7 +85,7 @@ def _plan_rebalance(state: RebalanceState) -> RebalanceState:
             f"월급: {state['salary']:,}원\n"
             f"고정지출(이미 별도 처리됨): {state['fixed_expense']:,}원\n"
             f"가처분소득: {spendable:,}원\n\n"
-            f"PorTI 유형: {state['porti_type']} — {state['porti_comment']}\n"
+            f"PorTI 유형: {porti_label(state['porti_type'])} — {state['porti_comment']}\n"
             f"최근 변동지출 패턴: {state['expense_summary']}\n\n"
             f"보유 계좌 목록 (allocations의 asset_id는 아래 UUID만 사용):\n{asset_lines}"
         )),
