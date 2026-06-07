@@ -4,8 +4,7 @@ products 테이블에 금융 상품 데이터를 적재하는 스크립트.
 적재 대상:
   - 우리은행 정기예금 (FSS API, 최고우대금리 반영)
   - 우리은행 적금     (FSS API, 최고우대금리 반영)
-  - 전체 상장 ETF     (KRX Open API, 최근 3년 연평균 수익률(CAGR) 계산 포함)
-  - 일반 채권시장     (KRX API, 당일 종가수익률(YTM) 반영)
+  - 전체 상장 ETF     (KRX Open API, 최근 3년 연평균 수익률(CAGR) 계산 포함, 이름 임베딩)
   - 우리투자증권 ISA  (정적 데이터 하드코딩)
   - 우리투자증권 IRP  (정적 데이터 하드코딩)
   - 우리투자증권 연금저축계좌 (정적 데이터 하드코딩)
@@ -39,9 +38,7 @@ VECTOR_DIM = 1536
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 FSS_BASE = "https://finlife.fss.or.kr/finlifeapi"
-KRX_ETF_URL  = "https://data-dbg.krx.co.kr/svc/apis/etp/etf_bydd_trd"
-# 일반 채권시장 일자별 시세 API URL로 변경
-KRX_BOND_URL = "https://data-dbg.krx.co.kr/svc/apis/bon/bnd_bydd_trd"
+KRX_ETF_URL = "https://data-dbg.krx.co.kr/svc/apis/etp/etf_bydd_trd"
 
 # 우리투자증권 ISA/IRP/연금저축 상품 (하드코딩)
 STATIC_PRODUCTS: list[dict] = [
@@ -49,6 +46,7 @@ STATIC_PRODUCTS: list[dict] = [
         "product_type": "STOCK",
         "institution": "우리투자증권",
         "name": "우리투자증권 중개형 ISA",
+        "ticker": None,
         "interest_rate": None,
         "description": (
             "개인종합자산관리계좌(ISA). "
@@ -63,6 +61,7 @@ STATIC_PRODUCTS: list[dict] = [
         "product_type": "IRP",
         "institution": "우리투자증권",
         "name": "우리투자증권 개인형 IRP",
+        "ticker": None,
         "interest_rate": None,
         "description": (
             "개인형 퇴직연금(IRP). "
@@ -76,6 +75,7 @@ STATIC_PRODUCTS: list[dict] = [
         "product_type": "PENSION_SAVINGS",
         "institution": "우리투자증권",
         "name": "우리투자증권 연금저축계좌",
+        "ticker": None,
         "interest_rate": None,
         "description": (
             "연금저축계좌. 소득세법에서 정한 연금 수령 요건에 따라 자금을 인출하는 경우 "
@@ -189,6 +189,7 @@ def collect_fss_deposits() -> list[dict]:
             "product_type": "DEPOSIT",
             "institution": "우리은행",
             "name": item.get("fin_prdt_nm", ""),
+            "ticker": None,
             "interest_rate": _get_max_intr_rate2(item),
             "description": _deposit_description(item),
         })
@@ -225,6 +226,7 @@ def collect_fss_savings() -> list[dict]:
             "product_type": "SAVING",
             "institution": "우리은행",
             "name": item.get("fin_prdt_nm", ""),
+            "ticker": None,
             "interest_rate": _get_max_intr_rate2(item),
             "description": _saving_description(item),
         })
@@ -325,70 +327,7 @@ def collect_krx_etf() -> list[dict]:
             "product_type": "ETF",
             "institution": brand,
             "name": name,
-            "interest_rate": interest_rate,
-            "description": description,
-        })
-
-    return products
-
-
-# ---------------------------------------------------------------------------
-# KRX 일반 채권시장 수집 (당일 종가수익률 반영)
-# ---------------------------------------------------------------------------
-
-def _fetch_krx_bonds(date_str: str) -> list[dict]:
-    resp = requests.get(
-        url=KRX_BOND_URL,
-        headers={"AUTH_KEY": KRX_API_KEY},
-        params={"basDd": date_str},
-        timeout=15,
-    )
-    resp.raise_for_status()
-    return resp.json().get("OutBlock_1", [])
-
-def collect_krx_bonds() -> list[dict]:
-    today = datetime.now(timezone.utc) + timedelta(hours=9)
-    
-    # 최근 영업일 데이터 확보
-    rows_today = []
-    for delta in range(0, 14):
-        d = (today - timedelta(days=delta)).strftime("%Y%m%d")
-        rows = _fetch_krx_bonds(d)
-        if rows:
-            rows_today = rows
-            break
-
-    products = []
-    for row in rows_today:
-        name: str = row.get("ISU_NM", "")
-        if not name:
-            continue
-
-        code = row.get('ISU_CD', '')
-        
-        # KRX에서 당일 제공하는 종가수익률(YTM) 파싱
-        interest_rate = None
-        try:
-            yld = float(row.get('CLSPRC_YD', '0'))
-            interest_rate = yld
-        except (ValueError, TypeError):
-            pass
-
-        # 일반 채권시장 API의 응답 필드에 맞게 설명 재구성 (만기연수 등 불확실한 필드 제거)
-        description = (
-            f"채권명: {name} | "
-            f"종목코드: {code} | "
-            f"시장구분: {row.get('MKT_NM', '')} | "
-            f"종가(가격): {row.get('CLSPRC', '')} | "
-        )
-        
-        if interest_rate is not None:
-            description += f"당일 종가수익률(YTM): {interest_rate}% | "
-
-        products.append({
-            "product_type": "BOND",
-            "institution": "한국거래소",
-            "name": name,
+            "ticker": code,
             "interest_rate": interest_rate,
             "description": description,
         })
@@ -403,12 +342,13 @@ def collect_krx_bonds() -> list[dict]:
 UPSERT_SQL = """
 INSERT INTO products (
     id, product_type, institution, name,
-    interest_rate, description, embedding,
+    ticker, interest_rate, description, embedding,
     created_at, updated_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
 ON CONFLICT (name, institution)
 DO UPDATE SET
+    ticker        = EXCLUDED.ticker,
     interest_rate = EXCLUDED.interest_rate,
     description   = EXCLUDED.description,
     embedding     = EXCLUDED.embedding,
@@ -471,10 +411,13 @@ async def load(products: list[dict]) -> None:
 
         total = len(products)
         for i, p in enumerate(products, 1):
-            desc = p["description"] or p["name"]
-            print(f"[{i}/{total}] 임베딩 생성: {p['name'][:40]}")
-            vector = embed(desc)
-            vector_str = "[" + ",".join(str(v) for v in vector) + "]"
+            if p["product_type"] == "ETF":
+                print(f"[{i}/{total}] 임베딩 생성: {p['name'][:40]}")
+                vector = embed(p["name"])
+                vector_str = "[" + ",".join(str(v) for v in vector) + "]"
+            else:
+                print(f"[{i}/{total}] 적재: {p['name'][:40]}")
+                vector_str = None
 
             await conn.execute(
                 UPSERT_SQL,
@@ -482,7 +425,8 @@ async def load(products: list[dict]) -> None:
                 p["product_type"],
                 p["institution"],
                 p["name"],
-                p["interest_rate"],  # 이제 수익률/우대금리 값도 들어갑니다.
+                p.get("ticker"),
+                p["interest_rate"],
                 p["description"],
                 vector_str,
                 now,
@@ -506,16 +450,15 @@ def _try_collect(label: str, fn) -> list[dict]:
 async def main() -> None:
     print("=== 상품 데이터 수집 시작 ===\n")
 
-    deposits = _try_collect("[1/5] FSS 정기예금", collect_fss_deposits)
-    savings  = _try_collect("[2/5] FSS 적금",        collect_fss_savings)
-    etfs     = _try_collect("[3/5] KRX ETF (KRX API)", collect_krx_etf)
-    bonds    = _try_collect("[4/5] KRX 일반 채권",   collect_krx_bonds)
+    deposits = _try_collect("[1/4] FSS 정기예금",      collect_fss_deposits)
+    savings  = _try_collect("[2/4] FSS 적금",           collect_fss_savings)
+    etfs     = _try_collect("[3/4] KRX ETF (KRX API)", collect_krx_etf)
 
-    print("[5/5] ISA/IRP/연금저축계좌 정적 데이터 준비...")
+    print("[4/4] ISA/IRP/연금저축계좌 정적 데이터 준비...")
     static = STATIC_PRODUCTS
     print(f"  → {len(static)}건\n")
 
-    all_products = deposits + savings + etfs + bonds + static
+    all_products = deposits + savings + etfs + static
     if not all_products:
         print("수집된 상품이 없어 종료합니다.")
         return
