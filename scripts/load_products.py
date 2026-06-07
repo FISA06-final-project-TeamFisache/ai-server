@@ -46,6 +46,7 @@ STATIC_PRODUCTS: list[dict] = [
         "product_type": "STOCK",
         "institution": "우리투자증권",
         "name": "우리투자증권 중개형 ISA",
+        "ticker": None,
         "interest_rate": None,
         "description": (
             "개인종합자산관리계좌(ISA). "
@@ -60,6 +61,7 @@ STATIC_PRODUCTS: list[dict] = [
         "product_type": "IRP",
         "institution": "우리투자증권",
         "name": "우리투자증권 개인형 IRP",
+        "ticker": None,
         "interest_rate": None,
         "description": (
             "개인형 퇴직연금(IRP). "
@@ -73,6 +75,7 @@ STATIC_PRODUCTS: list[dict] = [
         "product_type": "PENSION_SAVINGS",
         "institution": "우리투자증권",
         "name": "우리투자증권 연금저축계좌",
+        "ticker": None,
         "interest_rate": None,
         "description": (
             "연금저축계좌. 소득세법에서 정한 연금 수령 요건에 따라 자금을 인출하는 경우 "
@@ -186,6 +189,7 @@ def collect_fss_deposits() -> list[dict]:
             "product_type": "DEPOSIT",
             "institution": "우리은행",
             "name": item.get("fin_prdt_nm", ""),
+            "ticker": None,
             "interest_rate": _get_max_intr_rate2(item),
             "description": _deposit_description(item),
         })
@@ -222,6 +226,7 @@ def collect_fss_savings() -> list[dict]:
             "product_type": "SAVING",
             "institution": "우리은행",
             "name": item.get("fin_prdt_nm", ""),
+            "ticker": None,
             "interest_rate": _get_max_intr_rate2(item),
             "description": _saving_description(item),
         })
@@ -322,6 +327,7 @@ def collect_krx_etf() -> list[dict]:
             "product_type": "ETF",
             "institution": brand,
             "name": name,
+            "ticker": code,
             "interest_rate": interest_rate,
             "description": description,
         })
@@ -336,12 +342,13 @@ def collect_krx_etf() -> list[dict]:
 UPSERT_SQL = """
 INSERT INTO products (
     id, product_type, institution, name,
-    interest_rate, description, embedding,
+    ticker, interest_rate, description, embedding,
     created_at, updated_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
 ON CONFLICT (name, institution)
 DO UPDATE SET
+    ticker        = EXCLUDED.ticker,
     interest_rate = EXCLUDED.interest_rate,
     description   = EXCLUDED.description,
     embedding     = EXCLUDED.embedding,
@@ -418,6 +425,7 @@ async def load(products: list[dict]) -> None:
                 p["product_type"],
                 p["institution"],
                 p["name"],
+                p.get("ticker"),
                 p["interest_rate"],
                 p["description"],
                 vector_str,
