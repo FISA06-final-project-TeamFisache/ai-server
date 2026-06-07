@@ -48,6 +48,8 @@ STATIC_PRODUCTS: list[dict] = [
         "name": "우리투자증권 중개형 ISA",
         "ticker": None,
         "interest_rate": None,
+        "avg_trading_value": None,
+        "mktcap": None,
         "description": (
             "개인종합자산관리계좌(ISA). "
             "가입대상: 19세 이상 또는 근로소득이 있는 15세 이상 거주자. "
@@ -63,6 +65,8 @@ STATIC_PRODUCTS: list[dict] = [
         "name": "우리투자증권 개인형 IRP",
         "ticker": None,
         "interest_rate": None,
+        "avg_trading_value": None,
+        "mktcap": None,
         "description": (
             "개인형 퇴직연금(IRP). "
             "퇴직금 또는 본인 추가 납입금을 운용하며, 연간 납입한도는 연금저축 포함 1,800만 원. "
@@ -77,6 +81,8 @@ STATIC_PRODUCTS: list[dict] = [
         "name": "우리투자증권 연금저축계좌",
         "ticker": None,
         "interest_rate": None,
+        "avg_trading_value": None,
+        "mktcap": None,
         "description": (
             "연금저축계좌. 소득세법에서 정한 연금 수령 요건에 따라 자금을 인출하는 경우 "
             "연금소득으로 과세되는 상품. 가입기간 5년 이상, 만 55세 이후 연금 개시 가능. "
@@ -191,6 +197,8 @@ def collect_fss_deposits() -> list[dict]:
             "name": item.get("fin_prdt_nm", ""),
             "ticker": None,
             "interest_rate": _get_max_intr_rate2(item),
+            "avg_trading_value": None,
+            "mktcap": None,
             "description": _deposit_description(item),
         })
     return products
@@ -228,6 +236,8 @@ def collect_fss_savings() -> list[dict]:
             "name": item.get("fin_prdt_nm", ""),
             "ticker": None,
             "interest_rate": _get_max_intr_rate2(item),
+            "avg_trading_value": None,
+            "mktcap": None,
             "description": _saving_description(item),
         })
     return products
@@ -304,8 +314,21 @@ def collect_krx_etf() -> list[dict]:
         except ValueError:
             close_today = 0.0
 
+        def _parse_int(val: str) -> int | None:
+            try:
+                v = int(val.replace(",", ""))
+                return v if v > 0 else None
+            except (ValueError, AttributeError):
+                return None
+
+        avg_trading_value = _parse_int(row.get("ACC_TRDVAL", "0"))
+        mktcap = _parse_int(row.get("MKTCAP", "0"))
+
+        # 일평균 거래대금 1억 원 미만 ETF 제외 (청산위험)
+        if avg_trading_value is not None and avg_trading_value < 100_000_000:
+            continue
+
         # 연평균 수익률(CAGR) 계산: (현재가 / 과거가)^(1/연수) - 1
-        # 3년 전 데이터가 없으면 수익률은 None으로 저장하되 상품 자체는 수집되도록 수정
         interest_rate = None
         if close_3y is not None and close_3y > 0 and close_today > 0:
             cagr = ((close_today / close_3y) ** (1 / 3.0)) - 1
@@ -313,15 +336,19 @@ def collect_krx_etf() -> list[dict]:
 
         brand = name.split()[0] if name else ""
 
-        description = (
-            f"ETF명: {name} | "
-            f"종목코드: {code} | "
-            f"종가: {row.get('TDD_CLSPRC', '')}원 | "
-            f"거래량: {row.get('ACC_TRDVOL', '')} | "
-        )
+        desc_parts = [
+            f"ETF명: {name}",
+            f"종목코드: {code}",
+            f"종가: {row.get('TDD_CLSPRC', '')}원",
+        ]
+        if avg_trading_value:
+            desc_parts.append(f"거래대금: {avg_trading_value:,}원")
+        if mktcap:
+            desc_parts.append(f"시가총액: {mktcap:,}원")
         if interest_rate is not None:
-            description += f"최근 3년 연평균 수익률(CAGR): {interest_rate}% | "
-        description += f"운용사: {brand}"
+            desc_parts.append(f"최근 3년 연평균 수익률(CAGR): {interest_rate}%")
+        desc_parts.append(f"운용사: {brand}")
+        description = " | ".join(desc_parts)
 
         products.append({
             "product_type": "ETF",
@@ -329,6 +356,8 @@ def collect_krx_etf() -> list[dict]:
             "name": name,
             "ticker": code,
             "interest_rate": interest_rate,
+            "avg_trading_value": avg_trading_value,
+            "mktcap": mktcap,
             "description": description,
         })
 
@@ -343,20 +372,33 @@ UPSERT_SQL = """
 INSERT INTO products (
     id, product_type, institution, name,
     ticker, interest_rate, description, embedding,
+    mktcap, avg_trading_value,
     created_at, updated_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
 ON CONFLICT (name, institution)
 DO UPDATE SET
-    ticker        = EXCLUDED.ticker,
-    interest_rate = EXCLUDED.interest_rate,
-    description   = EXCLUDED.description,
-    embedding     = EXCLUDED.embedding,
-    updated_at    = EXCLUDED.updated_at
+    ticker             = EXCLUDED.ticker,
+    interest_rate      = EXCLUDED.interest_rate,
+    description        = EXCLUDED.description,
+    embedding          = EXCLUDED.embedding,
+    mktcap             = EXCLUDED.mktcap,
+    avg_trading_value  = EXCLUDED.avg_trading_value,
+    updated_at         = EXCLUDED.updated_at
 """
 
 async def ensure_schema(conn: asyncpg.Connection) -> None:
     await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+
+    for col, coltype in [("mktcap", "bigint"), ("avg_trading_value", "bigint")]:
+        exists = await conn.fetchval(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'products' AND column_name = $1",
+            col,
+        )
+        if not exists:
+            await conn.execute(f"ALTER TABLE products ADD COLUMN {col} {coltype}")
+            print(f"{col} {coltype} 컬럼 추가 완료")
 
     col_exists = await conn.fetchval("""
         SELECT 1 FROM information_schema.columns
@@ -429,6 +471,8 @@ async def load(products: list[dict]) -> None:
                 p["interest_rate"],
                 p["description"],
                 vector_str,
+                p.get("mktcap"),
+                p.get("avg_trading_value"),
                 now,
             )
             print(f"  → 적재 완료")
