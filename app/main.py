@@ -40,9 +40,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# 허용할 프론트 origin 목록(콤마 구분). 배포 시 CloudFront 도메인을 env로 주입.
+_allowed_origins = os.environ.get(
+    "CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=_allowed_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
