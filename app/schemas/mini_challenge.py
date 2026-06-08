@@ -39,7 +39,7 @@ class MiniChallengeResponse(BaseModel):
 class AdjustRequest(BaseModel):
     """세션에 이전 제안·소비 데이터가 있으므로 user_id만 필요."""
     user_id: UUID
-    feedback: str  # lower | higher | different
+    feedback: str  # 더 쉽게 조정해주세요 | 더 어렵게 조정해주세요 | 주제를 바꿔주세요
 
 
 class AdjustResponse(BaseModel):
