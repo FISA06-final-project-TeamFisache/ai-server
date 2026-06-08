@@ -94,15 +94,16 @@ async def _invoke_with_tools(
 _INIT_SYSTEM = (
     "당신은 개인 재무 관리 AI 어시스턴트 Pori입니다.\n"
     "사용자의 소비 패턴을 분석해 이번 달 실천 가능한 미니 챌린지를 제안합니다.\n\n"
+    "미니 챌린지는 소비 카테고리별 지출 횟수 또는 금액에 제한을 두는 형태입니다 (예: '카페 5번만 가기', '배달 음식 3만원만 쓰기').\n"
     "반드시 get_stock_prices 툴을 호출해 현재 주가를 조회한 뒤, "
     "소비 카테고리와 관심 테마에 가장 어울리는 종목 1개를 ticker로 지정하세요.\n\n"
     "반드시 아래 JSON 형식으로만 최종 응답하세요 (마크다운 코드블록 없이):\n"
-    '{"title":"카페 5번 줄이기","description":"카페 지출이 전체의 20%로 가장 높아요. 5번만 참으면 약 2만원 절약!",'
+    'example: {"title":"카페 5번만 가기","description":"카페 지출이 전체의 20%로 가장 높아요. 이번 달에는 5잔만 마셔봐요!",'
     '"challenge_type":"count","target":5,"category":"카페","estimated_saving":20000,"ticker":"005930.KS",'
     '"challenge_sub_type":"COFFEE"}\n\n'
     "필드 규칙:\n"
-    "- challenge_type: 횟수 줄이기 → count / 금액 줄이기 → amount\n"
-    "- target: 실제 목표값 (count → 목표 횟수, amount → 목표 절약 금액(원))\n"
+    "- challenge_type: 횟수 제한 → count / 금액 제한 → amount\n"
+    "- target: 실제 목표값 (count → 목표 횟수, amount → 목표 금액(원))\n"
     "- estimated_saving: 챌린지 완수 시 예상 절약 금액(원)\n"
     "- ticker: get_stock_prices 결과에서 선택\n"
     f"- challenge_sub_type: 반드시 아래 중 하나 — {', '.join(_CHALLENGE_SUB_TYPES)}\n"
@@ -114,13 +115,13 @@ _ADJUST_SYSTEM = (
     "사용자 피드백에 맞게 챌린지를 조정하거나 새 챌린지를 제안합니다.\n\n"
     "반드시 get_stock_prices 툴을 호출해 현재 주가를 조회한 뒤 ticker를 지정하세요.\n\n"
     "반드시 아래 JSON 형식으로만 최종 응답하세요 (마크다운 코드블록 없이):\n"
-    '{"title":"카페 3번 줄이기","description":"조금 더 쉽게, 3번만 참아봐요!",'
-    '"challenge_type":"count","target":3,"category":"카페","estimated_saving":12000,"ticker":"005930.KS",'
+    'example: {"title":"카페 7번만 가기","description":"조금 더 쉽게, 7잔으로 줄여봐요!",'
+    '"challenge_type":"count","target":7,"category":"카페","estimated_saving":12000,"ticker":"005930.KS",'
     '"challenge_sub_type":"COFFEE"}\n\n'
     "필드 규칙:\n"
-    "- feedback=lower: 같은 카테고리, 더 쉬운 버전 (target 줄이기)\n"
-    "- feedback=higher: 같은 카테고리, 더 어려운 버전 (target 늘리기)\n"
-    "- feedback=different: 완전히 다른 카테고리 기반 새 챌린지\n"
+    "- feedback='더 쉽게 조정해주세요': 가장 최근에 제안한 주제, 더 쉬운 버전 (target 늘리기)\n"
+    "- feedback='더 어렵게 조정해주세요': 가장 최근에 제안한 주제, 더 어려운 버전 (target 줄이기)\n"
+    "- feedback='주제를 바꿔주세요': 완전히 다른 카테고리 기반 새 챌린지\n"
     "- previous_proposals에 있는 챌린지 절대 반복 금지"
 )
 
@@ -185,9 +186,9 @@ async def adjust_challenge(req: AdjustRequest) -> AdjustResponse:
     session = await get_session(req.user_id)
 
     feedback_map = {
-        "lower": "같은 카테고리에서 더 쉬운 버전으로 조정해주세요.",
-        "higher": "같은 카테고리에서 더 어려운 버전으로 조정해주세요.",
-        "different": "완전히 다른 카테고리 기반으로 새 챌린지를 제안해주세요.",
+        "더 쉽게 조정해주세요": "가장 최근에 제안한 주제에서 더 쉬운 버전으로 조정해주세요.",
+        "더 어렵게 조정해주세요": "가장 최근에 제안한 주제에서 더 어려운 버전으로 조정해주세요.",
+        "주제를 바꿔주세요": "완전히 다른 카테고리 기반으로 새 챌린지를 제안해주세요.",
     }
 
     cats_raw = session.get("category_expense", [])

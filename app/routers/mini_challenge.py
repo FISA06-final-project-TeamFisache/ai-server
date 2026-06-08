@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 
+from app.kafka.producer import send_log
+from app.schemas.log_event import MiniChallengeAcceptedEvent
 from app.schemas.mini_challenge import (
     AdjustRequest,
     AdjustResponse,
@@ -80,6 +82,13 @@ async def reward(req: RewardRequest) -> RewardResponse:
         if not stock:
             raise HTTPException(status_code=503, detail="조회 가능한 종목이 없습니다")
         name, t, price, shares = stock
+
+    proposals = session.get("proposals", [])
+    await send_log(MiniChallengeAcceptedEvent(
+        user_id=str(req.user_id),
+        adjust_count=max(0, len(proposals) - 1),
+        final_challenge_sub_type=last.get("challenge_sub_type", ""),
+    ))
 
     await delete_session(req.user_id)
 
