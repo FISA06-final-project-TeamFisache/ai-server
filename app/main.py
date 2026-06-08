@@ -2,6 +2,20 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
+import socket
+
+# 기존의 통신 함수 저장
+original_getaddrinfo = socket.getaddrinfo
+
+# localhost로 요청이 오면 127.0.0.1로 바꿔서 보내도록 가로채기
+def patched_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    if host == 'localhost':
+        host = '127.0.0.1'
+    return original_getaddrinfo(host, port, family, type, proto, flags)
+
+# 바꿔치기 적용
+socket.getaddrinfo = patched_getaddrinfo
+
 from dotenv import load_dotenv
 
 load_dotenv()

@@ -2,17 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 
 from app.kafka.producer import send_log
-from app.schemas.log_event import (
-    MiniChallengeAcceptedEvent,
-    MiniChallengeAdjustedEvent,
-    MiniChallengeProposedEvent,
-)
+from app.schemas.log_event import MiniChallengeAcceptedEvent
 from app.schemas.mini_challenge import (
     AdjustRequest,
     AdjustResponse,
@@ -39,26 +34,8 @@ router = APIRouter(prefix="/mini_challenge", tags=["mini_challenge"])
 
 @router.post("", response_model=MiniChallengeResponse)
 async def mini_challenge(req: MiniChallengeRequest) -> MiniChallengeResponse:
-    start_ms = time.monotonic()
     try:
-        result = await asyncio.wait_for(propose_mini_challenge(req), timeout=60)
-        latency_ms = int((time.monotonic() - start_ms) * 1000)
-
-        session = await get_session(req.user_id)
-        proposal_round = len(session.get("proposals", []))
-        await send_log(MiniChallengeProposedEvent(
-            user_id=str(req.user_id),
-            proposal_round=proposal_round,
-            title=result.title,
-            category=result.category,
-            challenge_sub_type=result.challenge_sub_type,
-            challenge_type=result.challenge_type,
-            target=result.target,
-            estimated_saving=result.estimated_saving,
-            ticker=result.ticker,
-            latency_ms=latency_ms,
-        ))
-        return result
+        return await asyncio.wait_for(propose_mini_challenge(req), timeout=60)
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Mini challenge agent timed out")
     except Exception as e:
@@ -68,27 +45,8 @@ async def mini_challenge(req: MiniChallengeRequest) -> MiniChallengeResponse:
 
 @router.post("/adjust", response_model=AdjustResponse)
 async def adjust(req: AdjustRequest) -> AdjustResponse:
-    start_ms = time.monotonic()
     try:
-        result = await asyncio.wait_for(adjust_challenge(req), timeout=60)
-        latency_ms = int((time.monotonic() - start_ms) * 1000)
-
-        session = await get_session(req.user_id)
-        proposal_round = len(session.get("proposals", []))
-        await send_log(MiniChallengeAdjustedEvent(
-            user_id=str(req.user_id),
-            proposal_round=proposal_round,
-            feedback=req.feedback,
-            title=result.title,
-            category=result.category,
-            challenge_sub_type=result.challenge_sub_type,
-            challenge_type=result.challenge_type,
-            target=result.target,
-            estimated_saving=result.estimated_saving,
-            ticker=result.ticker,
-            latency_ms=latency_ms,
-        ))
-        return result
+        return await asyncio.wait_for(adjust_challenge(req), timeout=60)
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Mini challenge adjust timed out")
     except Exception as e:
@@ -128,11 +86,8 @@ async def reward(req: RewardRequest) -> RewardResponse:
     proposals = session.get("proposals", [])
     await send_log(MiniChallengeAcceptedEvent(
         user_id=str(req.user_id),
-        total_proposals=len(proposals),
-        final_category=last.get("category", ""),
+        adjust_count=max(0, len(proposals) - 1),
         final_challenge_sub_type=last.get("challenge_sub_type", ""),
-        final_estimated_saving=last.get("estimated_saving", 0),
-        final_ticker=ticker,
     ))
 
     await delete_session(req.user_id)
