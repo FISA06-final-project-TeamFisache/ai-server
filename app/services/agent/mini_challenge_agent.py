@@ -119,9 +119,9 @@ _ADJUST_SYSTEM = (
     '"challenge_type":"count","target":7,"category":"카페","estimated_saving":12000,"ticker":"005930.KS",'
     '"challenge_sub_type":"COFFEE"}\n\n'
     "필드 규칙:\n"
-    "- feedback=lower: 가장 최근에 제안한 주제, 더 쉬운 버전 (target 늘리기)\n"
-    "- feedback=higher: 가장 최근에 제안한 주제, 더 어려운 버전 (target 줄이기)\n"
-    "- feedback=different: 완전히 다른 카테고리 기반 새 챌린지\n"
+    "- feedback='더 쉽게 조정해주세요': 가장 최근에 제안한 주제, 더 쉬운 버전 (target 늘리기)\n"
+    "- feedback='더 어렵게 조정해주세요': 가장 최근에 제안한 주제, 더 어려운 버전 (target 줄이기)\n"
+    "- feedback='주제를 바꿔주세요': 완전히 다른 카테고리 기반 새 챌린지\n"
     "- previous_proposals에 있는 챌린지 절대 반복 금지"
 )
 
@@ -186,9 +186,9 @@ async def adjust_challenge(req: AdjustRequest) -> AdjustResponse:
     session = await get_session(req.user_id)
 
     feedback_map = {
-        "lower": "같은 카테고리에서 더 쉬운 버전으로 조정해주세요.",
-        "higher": "같은 카테고리에서 더 어려운 버전으로 조정해주세요.",
-        "different": "완전히 다른 카테고리 기반으로 새 챌린지를 제안해주세요.",
+        "더 쉽게 조정해주세요": "가장 최근에 제안한 주제에서 더 쉬운 버전으로 조정해주세요.",
+        "더 어렵게 조정해주세요": "가장 최근에 제안한 주제에서 더 어려운 버전으로 조정해주세요.",
+        "주제를 바꿔주세요": "완전히 다른 카테고리 기반으로 새 챌린지를 제안해주세요.",
     }
 
     cats_raw = session.get("category_expense", [])
