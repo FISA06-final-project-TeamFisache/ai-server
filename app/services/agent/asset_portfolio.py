@@ -18,6 +18,7 @@ from app.schemas.portfolio import (
     PortfolioItem,
 )
 from app.services.agent.llm import ainvoke_structured
+from app.services.agent.tools import normalize_ratios
 from app.services.rag.db import get_pool
 
 logger = logging.getLogger(__name__)
@@ -114,6 +115,10 @@ class AssetPortfolioState(TypedDict):
     flow_accounts: list[dict]
     flow_products: list[dict]
     investment_flows: list[dict]
+    reflection_log: list[dict]
+    reflection_round: int
+    has_misaligned: bool
+    misaligned_feedback: dict[str, str]
 
 
 # ── Tool functions (future @tool 전환 가능) ────────────────────────────────────
@@ -429,58 +434,18 @@ async def _select_products(state: AssetPortfolioState) -> AssetPortfolioState:
             flow_products.append({"flow_type": ft, "portfolio": []})
             continue
 
-        validated: list[dict] = []
-        for item in llm_map.get(ft, []):
-            name = item.name
-            # cross-validation: 목록에 없는 상품명 제거 (fuzzy fallback)
-            if name not in confirmed_by_name:
-                matched = next(
-                    (n for n in confirmed_by_name if name in n or n in name), None
-                )
-                if not matched:
-                    logger.warning("LLM 생성 상품명 — 목록 미존재, 제거: %s", name)
-                    continue
-                name = matched
-
-            p = confirmed_by_name[name]
-            validated.append({
-                "name": name,
-                "ticker": p.get("ticker") or item.ticker or "",
-                "ratio": item.ratio,
-                "comment": item.comment,
-            })
-
-        # LLM이 이 flow_type을 응답에서 누락했거나 cross-validation 후 비어있으면 상위 상품으로 채움
-        if not validated and state["etf_candidates"]:
-            logger.warning("LLM 포트폴리오 응답 없음(flow=%s) — etf_candidates 상위 항목으로 대체", ft)
-            top = state["etf_candidates"][:3]
-            base = 100 // len(top)
-            rem = 100 - base * len(top)
-            validated = [
-                {
-                    "name": p["name"],
-                    "ticker": p.get("ticker") or "",
-                    "ratio": base + (rem if i == 0 else 0),
-                    "comment": "분산 투자를 위한 기본 추천 상품입니다.",
-                }
-                for i, p in enumerate(top)
-            ]
-
-        # ratio 정규화
-        total = sum(v["ratio"] for v in validated)
-        if 0 < total != 100:
-            for v in validated:
-                v["ratio"] = round(v["ratio"] * 100 / total)
-            diff = 100 - sum(v["ratio"] for v in validated)
-            if validated and diff:
-                validated[0]["ratio"] += diff
+        validated = _validate_and_merge(
+            llm_map.get(ft, []), confirmed_by_name, state["etf_candidates"]
+        )
 
         flow_products.append({"flow_type": ft, "portfolio": validated})
 
     return {**state, "flow_products": flow_products}
 
 
-# ── Node: reflect_products ────────────────────────────────────────────────────
+# ── Nodes: evaluate_products / refine_products (Reflection loop) ──────────────
+
+_MAX_REFLECTION_ROUNDS = 2
 
 def _validate_and_merge(
     raw_items: list[_AIPortfolioItem],
@@ -494,7 +459,7 @@ def _validate_and_merge(
         if name not in confirmed_by_name:
             matched = next((n for n in confirmed_by_name if name in n or n in name), None)
             if not matched:
-                logger.warning("reflect refine — 목록 미존재 상품명 제거: %s", name)
+                logger.warning("상품명 목록 미존재, 제거: %s", name)
                 continue
             name = matched
         p = confirmed_by_name[name]
@@ -519,18 +484,13 @@ def _validate_and_merge(
             for i, p in enumerate(top)
         ]
 
-    total = sum(v["ratio"] for v in validated)
-    if 0 < total != 100:
-        for v in validated:
-            v["ratio"] = round(v["ratio"] * 100 / total)
-        diff = 100 - sum(v["ratio"] for v in validated)
-        if validated and diff:
-            validated[0]["ratio"] += diff
-
-    return validated
+    return normalize_ratios(validated)
 
 
-async def _reflect_products(state: AssetPortfolioState) -> AssetPortfolioState:
+async def _evaluate_products(state: AssetPortfolioState) -> AssetPortfolioState:
+    if state["reflection_round"] >= _MAX_REFLECTION_ROUNDS:
+        return {**state, "has_misaligned": False, "misaligned_feedback": {}}
+
     invest_flow_types = {
         fa["flow_type"] for fa in state["flow_accounts"] if fa["can_invest"]
     }
@@ -539,14 +499,11 @@ async def _reflect_products(state: AssetPortfolioState) -> AssetPortfolioState:
     ]
 
     if not invest_flows_products:
-        return state
+        return {**state, "has_misaligned": False, "misaligned_feedback": {}}
 
     portfolio_desc = "\n".join(
         f'- {fp["flow_type"]}: '
-        + ", ".join(
-            f'{p["name"]}({p["ratio"]}%)'
-            for p in fp["portfolio"]
-        )
+        + ", ".join(f'{p["name"]}({p["ratio"]}%)' for p in fp["portfolio"])
         for fp in invest_flows_products
     )
 
@@ -570,19 +527,33 @@ async def _reflect_products(state: AssetPortfolioState) -> AssetPortfolioState:
     eval_result = await ainvoke_structured(eval_messages, _ReflectionOutput)
 
     if not eval_result:
-        return state
+        return {**state, "has_misaligned": False, "misaligned_feedback": {}}
 
     misaligned = [r for r in eval_result.reflections if not r.is_aligned]
-    if not misaligned:
-        logger.info("reflect_products: 모든 흐름 성향 일치 — refine 생략")
-        return state
+    misaligned_feedback = {r.flow_type: r.feedback for r in misaligned}
 
-    logger.info("reflect_products: 불일치 흐름 %s — refine 시작", [r.flow_type for r in misaligned])
+    log_entry = {
+        "round": state["reflection_round"],
+        "misaligned": [r.flow_type for r in misaligned],
+        "feedback": misaligned_feedback,
+    }
+    logger.info("evaluate_products[round=%d]: %s", state["reflection_round"], log_entry)
 
+    return {
+        **state,
+        "has_misaligned": bool(misaligned),
+        "misaligned_feedback": misaligned_feedback,
+        "reflection_log": state["reflection_log"] + [log_entry],
+    }
+
+
+async def _refine_products(state: AssetPortfolioState) -> AssetPortfolioState:
+    misaligned_map = state["misaligned_feedback"]
     confirmed_by_name: dict[str, dict] = {p["name"]: p for p in state["etf_candidates"]}
     account_type_map = {fa["flow_type"]: fa["account_type"] for fa in state["flow_accounts"]}
 
-    misaligned_map = {r.flow_type: r.feedback for r in misaligned}
+    logger.info("refine_products[round=%d]: 대상 흐름 %s", state["reflection_round"], list(misaligned_map.keys()))
+
     refine_flows_desc = "\n".join(
         f'- {ft} (계좌:{account_type_map.get(ft,"")}) 개선 필요: {fb}'
         for ft, fb in misaligned_map.items()
@@ -616,7 +587,7 @@ async def _reflect_products(state: AssetPortfolioState) -> AssetPortfolioState:
     refine_result = await ainvoke_structured(refine_messages, _ProductsAIOutput)
 
     if not refine_result:
-        return state
+        return {**state, "reflection_round": state["reflection_round"] + 1}
 
     refine_map = {fp.flow_type: fp.portfolio for fp in refine_result.flow_products}
 
@@ -631,7 +602,19 @@ async def _reflect_products(state: AssetPortfolioState) -> AssetPortfolioState:
         else:
             updated_products.append(fp)
 
-    return {**state, "flow_products": updated_products}
+    return {
+        **state,
+        "flow_products": updated_products,
+        "reflection_round": state["reflection_round"] + 1,
+    }
+
+
+def _should_refine(state: AssetPortfolioState) -> str:
+    if state["has_misaligned"] and state["reflection_round"] < _MAX_REFLECTION_ROUNDS:
+        return "refine_products"
+    if state["has_misaligned"]:
+        logger.info("evaluate_products: 최대 반복(%d) 도달, 수정 없이 종료", _MAX_REFLECTION_ROUNDS)
+    return "calculate"
 
 
 # ── Node: calculate ───────────────────────────────────────────────────────────
@@ -727,15 +710,21 @@ def _build_graph() -> StateGraph:
     graph.add_node("define_flows", _define_flows)
     graph.add_node("select_accounts", _select_accounts)
     graph.add_node("select_products", _select_products)
-    graph.add_node("reflect_products", _reflect_products)
+    graph.add_node("evaluate_products", _evaluate_products)
+    graph.add_node("refine_products", _refine_products)
     graph.add_node("calculate", _calculate)
 
     graph.set_entry_point("preprocess")
     graph.add_edge("preprocess", "define_flows")
     graph.add_edge("define_flows", "select_accounts")
     graph.add_edge("select_accounts", "select_products")
-    graph.add_edge("select_products", "reflect_products")
-    graph.add_edge("reflect_products", "calculate")
+    graph.add_edge("select_products", "evaluate_products")
+    graph.add_conditional_edges(
+        "evaluate_products",
+        _should_refine,
+        {"refine_products": "refine_products", "calculate": "calculate"},
+    )
+    graph.add_edge("refine_products", "evaluate_products")
     graph.add_edge("calculate", END)
 
     return graph.compile()
@@ -771,6 +760,10 @@ async def recommend_asset_portfolio(request: AssetPortfolioRequest) -> AssetPort
         "flow_accounts": [],
         "flow_products": [],
         "investment_flows": [],
+        "reflection_log": [],
+        "reflection_round": 0,
+        "has_misaligned": False,
+        "misaligned_feedback": {},
     }
 
     final_state: AssetPortfolioState = await _graph.ainvoke(initial_state)

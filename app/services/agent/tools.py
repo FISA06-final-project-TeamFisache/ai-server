@@ -92,4 +92,28 @@ async def get_stock_prices() -> list[dict]:
     return [{"name": n, "ticker": t, "price_krw": p} for n, t, p in prices]
 
 
-MINI_CHALLENGE_TOOLS = [get_stock_prices]
+def normalize_ratios(items: list[dict], key: str = "ratio") -> list[dict]:
+    """비율 합계가 100이 되도록 정규화. 반올림 오차는 첫 항목에 흡수."""
+    if not items:
+        return items
+    total = sum(v[key] for v in items)
+    if total == 0 or total == 100:
+        return items
+    result = [{**v, key: round(v[key] * 100 / total)} for v in items]
+    diff = 100 - sum(v[key] for v in result)
+    if diff:
+        result[0] = {**result[0], key: result[0][key] + diff}
+    return result
+
+
+def normalize_amounts(items: list[dict], key: str, target: int) -> list[dict]:
+    """금액 합계가 target이 되도록 비례 조정. 반올림 오차는 마지막 항목에 흡수."""
+    if not items or target <= 0:
+        return items
+    total_weight = sum(v[key] for v in items) or 1
+    scale = target / total_weight
+    result = [{**v, key: max(0, round(v[key] * scale))} for v in items]
+    diff = target - sum(v[key] for v in result)
+    if diff != 0:
+        result[-1] = {**result[-1], key: max(0, result[-1][key] + diff)}
+    return result

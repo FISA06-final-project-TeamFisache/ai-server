@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from app.schemas.salary import SalaryRequest, SalaryResponse, PortfolioItem
 from app.services.agent.llm import ainvoke_structured
+from app.services.agent.tools import normalize_amounts
 
 logger = logging.getLogger(__name__)
 
@@ -16,11 +17,8 @@ class _RebalanceCommentOutput(BaseModel):
 
 
 def _calculate_adjusted(current: list[dict], salary_diff: int) -> list[dict]:
-    total = sum(a["amount"] for a in current) or 1
-    return [
-        {**a, "amount": max(0, round(a["amount"] + salary_diff * a["amount"] / total))}
-        for a in current
-    ]
+    target = max(0, sum(a["amount"] for a in current) + salary_diff)
+    return normalize_amounts(current, "amount", target)
 
 
 async def _generate_comment(
