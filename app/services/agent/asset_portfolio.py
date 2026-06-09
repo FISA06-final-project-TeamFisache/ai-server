@@ -21,12 +21,11 @@ from app.services.agent.llm import ainvoke_structured
 from app.services.agent.tools import normalize_ratios
 from app.services.rag.db import get_pool
 from app.services.agent.porti_types import porti_label as _porti_label
+from app.services.agent.gather_products import GATHER_PRODUCTS
 
 logger = logging.getLogger(__name__)
 
 _EMBED_MODEL = "text-embedding-3-small"
-_INVEST_PRODUCT_TYPES = ["STOCK", "ETF", "BOND"]
-_GATHER_PRODUCT_TYPES = ["CHECKING", "PARKING", "CMA", "SAVINGS", "DEPOSIT", "ISA", "IRP", "PENSION_SAVINGS"]
 _WOORI_BANK = "우리은행"
 _WOORI_INVEST = "우리투자증권"
 _MAX_REFLECTION_ROUNDS = 2
@@ -206,36 +205,25 @@ async def _preprocess(state: AssetPortfolioState) -> AssetPortfolioState:
                     "SELECT product_type, institution, name, ticker, interest_rate, description, "
                     "mktcap, avg_trading_value "
                     "FROM products "
-                    "WHERE product_type = ANY($1::text[]) AND deleted_at IS NULL "
-                    "ORDER BY embedding <=> $2::vector "
+                    "WHERE deleted_at IS NULL "
+                    "ORDER BY embedding <=> $1::vector "
                     "LIMIT 30",
-                    _INVEST_PRODUCT_TYPES, vec_str,
+                    vec_str,
                 )
             else:
                 rows = await pool.fetch(
                     "SELECT product_type, institution, name, ticker, interest_rate, description, "
                     "mktcap, avg_trading_value "
                     "FROM products "
-                    "WHERE product_type = ANY($1::text[]) AND deleted_at IS NULL "
+                    "WHERE deleted_at IS NULL "
                     "ORDER BY interest_rate DESC NULLS LAST "
                     "LIMIT 30",
-                    _INVEST_PRODUCT_TYPES,
                 )
             etf_candidates = [dict(r) for r in rows]
         except Exception as e:
             logger.warning("투자 상품 조회 실패: %s", e)
 
-        try:
-            rows = await pool.fetch(
-                "SELECT product_type, institution, name, ticker, interest_rate, description "
-                "FROM products "
-                "WHERE product_type = ANY($1::text[]) AND deleted_at IS NULL "
-                "ORDER BY product_type, interest_rate DESC NULLS LAST",
-                _GATHER_PRODUCT_TYPES,
-            )
-            gather_products = [dict(r) for r in rows]
-        except Exception as e:
-            logger.warning("모으기 상품 조회 실패: %s", e)
+        gather_products = GATHER_PRODUCTS
 
     return {
         **state,
