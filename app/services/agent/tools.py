@@ -1,4 +1,9 @@
+import json
+import logging
+
 from langchain_core.tools import tool
+
+logger = logging.getLogger(__name__)
 
 
 @tool
@@ -54,4 +59,46 @@ def rebalance_diff(current_ratio: float, target_ratio: float, total_asset: float
     }
 
 
-FINANCE_TOOLS = [compound_interest, monthly_savings_needed, normalize_ratios, rebalance_diff]
+@tool
+def calculate_hrp_weights(returns_json: str) -> str:
+    """
+    수익률 시계열 JSON → HRP(계층적 리스크 패리티) 최적 비중 계산.
+    입력: pandas DataFrame.to_json() 형식 (컬럼=ETF명, 행=날짜별 수익률)
+    반환: {"ETF명": 비중, ...} JSON. 비중 합계는 수학적으로 1.0 보장.
+    데이터 부족(< 20일) 또는 상품 1개이면 균등/단독 가중치로 폴백.
+    """
+    try:
+        import pandas as pd
+        from pypfopt.hierarchical_portfolio import HRPOpt
+
+        returns = pd.read_json(returns_json)
+        if returns.empty:
+            return json.dumps({"error": "빈 데이터"})
+
+        if len(returns.columns) == 1:
+            return json.dumps({returns.columns[0]: 1.0})
+
+        if len(returns) < 20:
+            n = len(returns.columns)
+            return json.dumps({c: round(1.0 / n, 4) for c in returns.columns})
+
+        hrp = HRPOpt(returns)
+        weights = hrp.optimize()
+        return json.dumps({k: round(v, 4) for k, v in weights.items()})
+
+    except ImportError:
+        logger.warning("PyPortfolioOpt 미설치 — 균등 가중치로 폴백")
+    except Exception as e:
+        logger.warning("HRP 계산 실패: %s", e)
+
+    # 폴백: 균등 가중치
+    try:
+        import pandas as pd
+        cols = pd.read_json(returns_json).columns.tolist()
+        eq = round(1.0 / len(cols), 4) if cols else 1.0
+        return json.dumps({c: eq for c in cols})
+    except Exception:
+        return json.dumps({"error": "계산 실패"})
+
+
+FINANCE_TOOLS = [compound_interest, monthly_savings_needed, normalize_ratios, rebalance_diff, calculate_hrp_weights]
