@@ -1,3 +1,4 @@
+import io
 import json
 import logging
 
@@ -71,7 +72,7 @@ def calculate_hrp_weights(returns_json: str) -> str:
         import pandas as pd
         from pypfopt.hierarchical_portfolio import HRPOpt
 
-        returns = pd.read_json(returns_json)
+        returns = pd.read_json(io.StringIO(returns_json))
         if returns.empty:
             return json.dumps({"error": "빈 데이터"})
 
@@ -94,7 +95,7 @@ def calculate_hrp_weights(returns_json: str) -> str:
     # 폴백: 균등 가중치
     try:
         import pandas as pd
-        cols = pd.read_json(returns_json).columns.tolist()
+        cols = pd.read_json(io.StringIO(returns_json)).columns.tolist()
         eq = round(1.0 / len(cols), 4) if cols else 1.0
         return json.dumps({c: eq for c in cols})
     except Exception:
