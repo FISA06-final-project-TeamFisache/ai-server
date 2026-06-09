@@ -20,10 +20,10 @@ from app.schemas.mini_challenge import (
 )
 from app.services.agent.mini_challenge_agent import (
     adjust_challenge,
-    generate_nag,
     get_last_proposal,
     propose_mini_challenge,
 )
+from app.services.agent.nag_agent import generate_nag
 from app.services.session import delete_session, get_session
 from app.services.agent.tools import get_all_prices, pick_stock
 
