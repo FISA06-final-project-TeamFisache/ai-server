@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from app.schemas.mini_challenge import (
     AdjustRequest,
     AdjustResponse,
+    ChallengeType,
     MiniChallengeRequest,
     MiniChallengeResponse,
 )
@@ -26,7 +27,7 @@ _SubType = Literal["COFFEE", "DELIVERY", "ALCOHOL", "LATE_NIGHT", "LUNCH", "SHOP
 class _MiniChallengeAIOutput(BaseModel):
     title: str
     description: str
-    challenge_type: str
+    challenge_type: ChallengeType
     target: int
     category: str
     estimated_saving: int
@@ -37,7 +38,7 @@ class _MiniChallengeAIOutput(BaseModel):
 class _AdjustAIOutput(BaseModel):
     title: str
     description: str
-    challenge_type: str
+    challenge_type: ChallengeType
     target: int | None
     category: str
     estimated_saving: int
@@ -60,8 +61,8 @@ _INIT_SYSTEM = (
     f"   {_SUB_TYPE_MAP}\n\n"
     "2단계 — 챌린지 설계:\n"
     "   선정한 challenge_sub_type을 기준으로 나머지 필드를 결정합니다.\n"
-    "   - challenge_type: 횟수 제한 → count / 금액 제한 → amount\n"
-    "   - target: 목표값 (count → 횟수, amount → 금액(원))\n"
+    "   - challenge_type: 횟수 제한 → COUNT / 금액 제한 → AMOUNT\n"
+    "   - target: 목표값 (COUNT → 횟수, AMOUNT → 금액(원))\n"
     "   - estimated_saving: 챌린지 완수 시 예상 절약 금액(원)\n\n"
     "3단계 — ticker 선택:\n"
     "   아래 현재 주가 목록에서 소비 카테고리와 관심 테마에 맞는 종목 1개를 선택합니다."
@@ -179,7 +180,7 @@ async def adjust_challenge(req: AdjustRequest) -> AdjustResponse:
     return AdjustResponse(
         created_at=datetime.now(timezone.utc),
         title="소비 줄이기",
-        challenge_type="count",
+        challenge_type=ChallengeType.COUNT,
         target=None,
         category="기타",
         description="조금 더 쉬운 목표로 다시 도전해보세요.",
@@ -201,7 +202,7 @@ def _default_challenge_response() -> MiniChallengeResponse:
         description="이번 달 소비를 한 번 줄여보세요.",
         category="기타",
         target=5,
-        challenge_type="count",
+        challenge_type=ChallengeType.COUNT,
         estimated_saving=0,
         ticker="005930.KS",
         challenge_sub_type="COFFEE",
