@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import Enum
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class ChallengeType(str, Enum):
+    COUNT = "COUNT"
+    AMOUNT = "AMOUNT"
 
 
 class CategoryExpenseItem(BaseModel):
@@ -28,7 +34,7 @@ class MiniChallengeResponse(BaseModel):
     description: str
     category: str
     target: int
-    challenge_type: str  # count | amount
+    challenge_type: ChallengeType
     estimated_saving: int
     ticker: str
     challenge_sub_type: str
@@ -46,7 +52,7 @@ class AdjustResponse(BaseModel):
     """조정 제안 응답. target = 실제 목표값 (횟수 또는 금액)."""
     created_at: datetime
     title: str
-    challenge_type: str
+    challenge_type: ChallengeType
     target: int | None
     category: str
     description: str
@@ -76,7 +82,7 @@ class NagRequest(BaseModel):
     user_id: UUID
     title: str
     category: str
-    challenge_type: str
+    challenge_type: ChallengeType
     target: int | None
     current: int
     progress_pct: int  # 50 | 80 | 90
