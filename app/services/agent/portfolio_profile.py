@@ -5,6 +5,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.schemas.portfolio import ProfileRequest, ProfileResponse
 from app.services.agent.llm import get_llm
+from app.services.agent.porti_types import porti_label
 
 
 async def _generate_expense_comment(porti_type: str, porti_comment: str, expense_summary: str) -> str:
@@ -19,8 +20,8 @@ async def _generate_expense_comment(porti_type: str, porti_comment: str, expense
             "- 이모지·특수문자 금지."
         )),
         HumanMessage(content=(
-            f"PorTI 유형: {porti_type}\n"
-            f"성향: {porti_comment}\n"
+            f"PorTI 유형: {porti_label(porti_type)}\n"
+            f"성향 설명: {porti_comment}\n"
             f"월 평균 지출: {expense_summary}"
         )),
     ]
@@ -40,7 +41,7 @@ async def _generate_invest_comment(porti_type: str, asset_summary: str) -> str:
             "- 이모지·특수문자 금지."
         )),
         HumanMessage(content=(
-            f"PorTI 유형: {porti_type}\n"
+            f"PorTI 유형: {porti_label(porti_type)}\n"
             f"실제 자산 구성: {asset_summary}"
         )),
     ]

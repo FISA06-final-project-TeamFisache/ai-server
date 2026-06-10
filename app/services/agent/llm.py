@@ -10,36 +10,17 @@ from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
-from app.core import config
-
 logger = logging.getLogger(__name__)
-
-# OpenRouter 우선, 없으면 OpenAI 직접 사용
-openrouter_api_key: str = (
-    os.environ.get("OPENROUTER_API_KEY", "")
-    or os.environ.get("OPENAI_API_KEY", "")
-)
-openrouter_base_url: str = os.environ.get("OPENROUTER_BASE_URL", "") or ""
-
-_OPENROUTER_HEADERS = {
-    "HTTP-Referer": "https://github.com/wooriport",
-    "X-Title": "WooriPort AI Server",
-}
 
 T = TypeVar("T", bound=BaseModel)
 
 
 def get_llm(temperature: float | None = None) -> ChatOpenAI:
-    kwargs: dict = {
-        "model": os.environ.get("LLM_MODEL", "gpt-4o"),
-        "temperature": temperature if temperature is not None else float(os.environ.get("LLM_TEMPERATURE", config.LLM_TEMPERATURE)),
-        "openai_api_key": openrouter_api_key,
-        "max_tokens": 4096,
-    }
-    if openrouter_base_url:
-        kwargs["openai_api_base"] = openrouter_base_url
-        kwargs["default_headers"] = _OPENROUTER_HEADERS
-    return ChatOpenAI(**kwargs
+    return ChatOpenAI(
+        model=os.environ.get("LLM_MODEL", "gpt-4o"),
+        temperature=temperature if temperature is not None else float(os.environ.get("LLM_TEMPERATURE", "0.2")),
+        openai_api_key=os.environ.get("OPENAI_API_KEY"),
+        max_tokens=4096,
     )
 
 

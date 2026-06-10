@@ -1,31 +1,33 @@
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
 from typing import TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langgraph.graph import END, StateGraph
 from pydantic import BaseModel
 from tavily import TavilyClient
 
 from app.schemas.report import HoverDescription, ReportRequest, ReportResponse
-from app.services.agent.llm import invoke_structured
+from app.services.agent.llm import ainvoke_structured
 
 logger = logging.getLogger(__name__)
 
 
-def _fetch_market_news() -> str:
+async def _fetch_market_news() -> str:
     """Tavily로 최신 한국 금융 시장 뉴스 검색. 키 없으면 빈 문자열 반환."""
     tavily_api_key = os.environ.get("TAVILY_API_KEY", "")
     if not tavily_api_key:
         return ""
     try:
-        client = TavilyClient(api_key=tavily_api_key)
-        results = client.search(
-            query="한국 주식 금리 경제 시장 동향",
-            search_depth="basic",
-            max_results=3,
-        )
+        def _search() -> dict:
+            return TavilyClient(api_key=tavily_api_key).search(
+                query="한국 주식 금리 경제 시장 동향",
+                search_depth="basic",
+                topic="finance",
+                max_results=3,
+            )
+        results = await asyncio.to_thread(_search)
         snippets = [r.get("content", "") for r in results.get("results", []) if r.get("content")]
         return "\n".join(snippets[:3])
     except Exception as e:
@@ -64,7 +66,7 @@ class ReportState(TypedDict):
     guideline: str
 
 
-def _analyze_report(state: ReportState) -> ReportState:
+async def _analyze_report(state: ReportState) -> ReportState:
     market_section = (
         f"\n최신 시장 뉴스:\n{state['market_news']}"
         if state["market_news"]
@@ -96,7 +98,7 @@ def _analyze_report(state: ReportState) -> ReportState:
         )),
     ]
 
-    result = invoke_structured(messages, _ReportAIOutput)
+    result = await ainvoke_structured(messages, _ReportAIOutput)
 
     if result:
         hover = [{"category": h.category, "content": h.content} for h in result.hover_descriptions]
@@ -120,16 +122,6 @@ def _analyze_report(state: ReportState) -> ReportState:
         "guideline": "다음 달도 꾸준한 저축을 이어가세요.",
     }
 
-
-def _build_graph() -> StateGraph:
-    graph = StateGraph(ReportState)
-    graph.add_node("analyze", _analyze_report)
-    graph.set_entry_point("analyze")
-    graph.add_edge("analyze", END)
-    return graph.compile()
-
-
-_graph = _build_graph()
 
 
 async def generate_report(request: ReportRequest) -> ReportResponse:
@@ -179,7 +171,7 @@ async def generate_report(request: ReportRequest) -> ReportResponse:
     else:
         mini_challenges_summary = "  챌린지 없음"
 
-    market_news = _fetch_market_news()
+    market_news = await _fetch_market_news()
 
     initial_state: ReportState = {
         "year": request.year,
@@ -197,7 +189,7 @@ async def generate_report(request: ReportRequest) -> ReportResponse:
         "guideline": "",
     }
 
-    final_state: ReportState = await _graph.ainvoke(initial_state)
+    final_state: ReportState = await _analyze_report(initial_state)
 
     valid_hover = [
         HoverDescription(category=h["category"], content=h["content"])

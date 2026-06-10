@@ -8,3 +8,9 @@ services:
     volumes:
       - ./models:/app/models
     restart: unless-stopped
+    networks:
+      - wooriport-network
+
+networks:
+  wooriport-network:
+    external: true

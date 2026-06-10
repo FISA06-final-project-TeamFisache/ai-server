@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from app.kafka.producer import start_producer, stop_producer
+
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
@@ -30,7 +32,10 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    kafka_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
+    await start_producer(kafka_servers)
     yield
+    await stop_producer()
 
 
 app = FastAPI(
@@ -40,9 +45,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# 허용할 프론트 origin 목록(콤마 구분). 배포 시 CloudFront 도메인을 env로 주입.
+_allowed_origins = os.environ.get(
+    "CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=_allowed_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )

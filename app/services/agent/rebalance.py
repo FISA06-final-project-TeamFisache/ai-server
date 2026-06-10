@@ -4,11 +4,12 @@ from typing import TypedDict
 from uuid import UUID
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 
 from app.schemas.portfolio import RebalanceRequest, RebalanceResponse, SalaryRebalanceItem
-from app.services.agent.llm import get_llm, invoke_structured
+from app.services.agent.llm import ainvoke_structured
+from app.services.agent.tools import normalize_amounts
+from app.services.agent.porti_types import porti_label
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +103,7 @@ _SYSTEM = (
 )
 
 
-def _plan_rebalance(state: RebalanceState) -> RebalanceState:
+async def _plan_rebalance(state: RebalanceState) -> RebalanceState:
     spendable = state["spendable"]
     default_invest = round(spendable * 0.25)
 
@@ -133,7 +134,7 @@ def _plan_rebalance(state: RebalanceState) -> RebalanceState:
         )),
     ]
 
-    result = invoke_structured(messages, _RebalancePlan)
+    result = await ainvoke_structured(messages, _RebalancePlan)
     if result is None:
         return {**state, "invest_amount": default_invest, "allocations": []}
 
@@ -174,23 +175,8 @@ def _plan_rebalance(state: RebalanceState) -> RebalanceState:
 
         remaining_amount = spendable - invest_amount
 
-        # 현재 allocations의 가중치(기존 비율 혹은 입력된 기준 값) 총합
-        total_weight = sum(a["amount"] for a in allocations)
-        
-        if total_weight > 0 and remaining_amount > 0:
-            # 가중치에 따른 실제 금액 배분 비율
-            scale = remaining_amount / total_weight
-            allocations = [
-                # 최소 금액을 0으로 설정하여 음수 방지
-                {**a, "amount": max(0, round(a["amount"] * scale))}
-                for a in allocations
-            ]
-            
-            # 반올림 오차 보정: 총합이 정확히 remaining_amount가 되도록 마지막 항목에 오차 흡수
-            actual_sum = sum(a["amount"] for a in allocations)
-            diff = remaining_amount - actual_sum
-            if diff != 0 and allocations:
-                allocations[-1] = {**allocations[-1], "amount": max(0, allocations[-1]["amount"] + diff)}
+        if allocations and remaining_amount > 0:
+            allocations = normalize_amounts(allocations, "amount", remaining_amount)
 
         return {**state, "invest_amount": invest_amount, "allocations": allocations}
 
@@ -245,7 +231,7 @@ async def rebalance_salary(request: RebalanceRequest) -> RebalanceResponse:
         "allocations": [],
     }
 
-    final_state: RebalanceState = await _graph.ainvoke(initial_state)
+    final_state: RebalanceState = await _plan_rebalance(initial_state)
 
     salary_rebalance: list[SalaryRebalanceItem] = [
         SalaryRebalanceItem(

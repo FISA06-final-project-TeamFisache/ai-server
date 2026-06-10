@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import Enum
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class ChallengeType(str, Enum):
+    COUNT = "COUNT"
+    AMOUNT = "AMOUNT"
 
 
 class CategoryExpenseItem(BaseModel):
@@ -27,55 +33,38 @@ class MiniChallengeResponse(BaseModel):
     title: str
     description: str
     category: str
-    target: int # 목표 횟수 또는 금액 (challenge_type에 따라 해석)
-    challenge_type: str  # count | amount
+    target: int
+    challenge_type: ChallengeType
     estimated_saving: int
     ticker: str
-    challenge_sub_type: str  # 챌린지 세부 유형 (예: "외식비", "카페비" 등)
+    challenge_sub_type: str
 
 
 # ── POST /mini_challenge/adjust ───────────────────────────────────────────────
 
-class PreviousProposalItem(BaseModel):
-    """adjust 요청 시 기피할 이전 제안 목록."""
-    model_config = ConfigDict(populate_by_name=True)
-
-    title: str
-    description: str = ""
-    challenge_type: str = Field(default="count", alias="challengeType")
-    category: str
-    estimated_saving: int = Field(default=0, alias="estimatedSaving")
-    ticker: str = Field(default="", alias="ticker")
-    challenge_sub_type: str  # 챌린지 세부 유형 (예: "외식비", "카페비" 등)
-    feedback: str
-
-
 class AdjustRequest(BaseModel):
+    """세션에 이전 제안·소비 데이터가 있으므로 user_id만 필요."""
     user_id: UUID
-    category_expense: list[CategoryExpenseItem]
-    previous_proposals: list[PreviousProposalItem] = []
-    stock_themes: list[str] = []
+    feedback: str  # 더 쉽게 조정해주세요 | 더 어렵게 조정해주세요 | 주제를 바꿔주세요
 
 
 class AdjustResponse(BaseModel):
     """조정 제안 응답. target = 실제 목표값 (횟수 또는 금액)."""
     created_at: datetime
     title: str
-    challenge_type: str
-    target: int | None   # 실제 목표 (count → 횟수, amount → 원)
+    challenge_type: ChallengeType
+    target: int | None
     category: str
     description: str
     ticker: str
     estimated_saving: int
-    challenge_sub_type: str  # 챌린지 세부 유형 (예: "외식비", "카페비" 등)
+    challenge_sub_type: str
 
 # ── POST /mini_challenge/reward ───────────────────────────────────────────────
 
 class RewardRequest(BaseModel):
+    """세션의 마지막 챌린지 ticker·estimated_saving을 사용하므로 user_id만 필요."""
     user_id: UUID
-    challenge_title: str
-    estimated_saving: int
-    ticker: str
 
 
 class RewardResponse(BaseModel):
@@ -93,10 +82,10 @@ class NagRequest(BaseModel):
     user_id: UUID
     title: str
     category: str
-    challenge_type: str
-    target: int | None   # 목표 횟수 | 금액
-    current: int         # 현재 횟수 | 금액
-    progress_pct: int    # 50 | 80 | 90
+    challenge_type: ChallengeType
+    target: int | None
+    current: int
+    progress_pct: int  # 50 | 80 | 90
 
 
 class NagResponse(BaseModel):
