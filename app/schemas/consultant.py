@@ -32,8 +32,20 @@ class ResetPortfolioItem(BaseModel):
     ratio: int
 
 
+class FlowProductItem(BaseModel):
+    productId: str
+    productRatio: int
+
+
+class FlowUpdate(BaseModel):
+    flowId: str
+    amount: int | None = None
+    products: list[FlowProductItem] = []
+
+
 class ResetProposeResponse(BaseModel):
     summary: str
     explanation: str
     salary_allocations: list[ResetAllocation] = []
     portfolio: list[ResetPortfolioItem] = []
+    flows: list[FlowUpdate] = []
