@@ -4,8 +4,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Literal
 
-from langchain.agents import create_agent
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel
 
 from app.schemas.mini_challenge import (
@@ -14,8 +13,8 @@ from app.schemas.mini_challenge import (
     MiniChallengeRequest,
     MiniChallengeResponse,
 )
-from app.services.agent.llm import get_llm
-from app.services.agent.tools import get_stock_prices
+from app.services.agent.llm import ainvoke_structured
+from app.services.agent.tools import get_all_prices
 from app.services.session import get_session, save_session
 
 logger = logging.getLogger(__name__)
@@ -65,8 +64,7 @@ _INIT_SYSTEM = (
     "   - target: 목표값 (count → 횟수, amount → 금액(원))\n"
     "   - estimated_saving: 챌린지 완수 시 예상 절약 금액(원)\n\n"
     "3단계 — ticker 선택:\n"
-    "   get_stock_prices 툴로 현재 주가를 조회한 뒤,\n"
-    "   소비 카테고리와 관심 테마에 맞는 종목 1개를 선택합니다."
+    "   아래 현재 주가 목록에서 소비 카테고리와 관심 테마에 맞는 종목 1개를 선택합니다."
 )
 
 _ADJUST_SYSTEM = (
@@ -83,19 +81,15 @@ _ADJUST_SYSTEM = (
     "   - '더 어렵게': target 줄이기\n"
     "   - '주제를 바꿔주세요': 소비 데이터 기반 새 챌린지 설계\n\n"
     "3단계 — ticker 선택:\n"
-    "   get_stock_prices 툴로 현재 주가를 조회한 뒤 적합한 종목 1개를 선택합니다."
+    "   아래 현재 주가 목록에서 적합한 종목 1개를 선택합니다."
 )
 
-# ── 컴파일된 에이전트 ─────────────────────────────────────────────────────────
 
-_challenge_agent = create_agent(
-    get_llm(), tools=[get_stock_prices],
-    system_prompt=_INIT_SYSTEM, response_format=_MiniChallengeAIOutput,
-)
-_adjust_agent = create_agent(
-    get_llm(), tools=[get_stock_prices],
-    system_prompt=_ADJUST_SYSTEM, response_format=_AdjustAIOutput,
-)
+async def _fetch_prices_text() -> str:
+    prices = await get_all_prices()
+    if not prices:
+        return "주가 조회 실패"
+    return "\n".join(f"- {name}({ticker}): {price:,}원" for name, ticker, price in prices)
 
 
 # ── 엔드포인트 핸들러 ─────────────────────────────────────────────────────────
@@ -113,13 +107,21 @@ async def propose_mini_challenge(req: MiniChallengeRequest) -> MiniChallengeResp
         for c in sorted(req.category_expense, key=lambda x: x.amount, reverse=True)
     ) or "소비 데이터 없음"
     themes_text = ", ".join(req.stock_themes) if req.stock_themes else "없음"
-    context = f"관심 주식 테마: {themes_text}\n\n이번 달 소비 패턴:\n{cats}"
+    prices_text = await _fetch_prices_text()
+
+    context = (
+        f"관심 주식 테마: {themes_text}\n\n"
+        f"이번 달 소비 패턴:\n{cats}\n\n"
+        f"현재 주가:\n{prices_text}"
+    )
 
     try:
-        agent_out = await _challenge_agent.ainvoke({"messages": [HumanMessage(content=context)]})
-        result: _MiniChallengeAIOutput | None = agent_out.get("structured_response")
+        result = await ainvoke_structured(
+            [SystemMessage(content=_INIT_SYSTEM), HumanMessage(content=context)],
+            _MiniChallengeAIOutput,
+        )
     except Exception as e:
-        logger.warning("propose_mini_challenge agent 실패: %s", e)
+        logger.warning("propose_mini_challenge 실패: %s", e)
         result = None
 
     if result:
@@ -149,14 +151,23 @@ async def adjust_challenge(req: AdjustRequest) -> AdjustResponse:
         )
 
     themes_text = ", ".join(session.get("stock_themes", [])) or "없음"
-    fb_text = f"\n\n사용자 요청: {req.feedback}"
-    context = f"관심 주식 테마: {themes_text}\n\n이번 달 소비 패턴:\n{cats}{prev_text}{fb_text}"
+    prices_text = await _fetch_prices_text()
+
+    context = (
+        f"관심 주식 테마: {themes_text}\n\n"
+        f"이번 달 소비 패턴:\n{cats}"
+        f"{prev_text}\n\n"
+        f"사용자 요청: {req.feedback}\n\n"
+        f"현재 주가:\n{prices_text}"
+    )
 
     try:
-        agent_out = await _adjust_agent.ainvoke({"messages": [HumanMessage(content=context)]})
-        result: _AdjustAIOutput | None = agent_out.get("structured_response")
+        result = await ainvoke_structured(
+            [SystemMessage(content=_ADJUST_SYSTEM), HumanMessage(content=context)],
+            _AdjustAIOutput,
+        )
     except Exception as e:
-        logger.warning("adjust_challenge agent 실패: %s", e)
+        logger.warning("adjust_challenge 실패: %s", e)
         result = None
 
     if result:
