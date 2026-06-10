@@ -4,6 +4,7 @@ from typing import TypedDict
 from uuid import UUID
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from langgraph.graph import StateGraph, END
 from pydantic import BaseModel, Field
 
 from app.schemas.portfolio import RebalanceRequest, RebalanceResponse, SalaryRebalanceItem
