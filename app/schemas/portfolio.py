@@ -56,6 +56,7 @@ class SalaryRebalanceItem(BaseModel):
 class RebalanceResponse(BaseModel):
     created_at: datetime
     invest_amount: int
+    reasoning: str = ""
     salary_rebalance: list[SalaryRebalanceItem]
 
 
@@ -112,4 +113,5 @@ class InvestmentPlan(BaseModel):
 
 class AssetPortfolioResponse(BaseModel):
     created_at: datetime
+    reasoning: str = ""
     investment_flows: list[InvestmentPlan]
