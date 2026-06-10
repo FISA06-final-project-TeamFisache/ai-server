@@ -3,6 +3,7 @@ import logging
 import math
 import operator
 import os
+import re
 from datetime import datetime, timezone
 from typing import Annotated, Literal, TypedDict
 from urllib.parse import urlparse
@@ -731,6 +732,14 @@ async def execute_flow(flow_state: FlowExecuteState) -> dict:
 
 
 # ── Graph ─────────────────────────────────────────────────────────────────────
+#
+# 변경 전: preprocess → define_flows → select_accounts → [search_trends?]
+#          → select_products → reflect → [refine?] → calculate
+#
+# 변경 후: preprocess → define_flows → select_accounts → [search_trends?]
+#          → investment_agent (LLM 선택 + HRP 계산) → calculate
+#
+# reflect/refine 제거 이유: 비중이 HRP로 수학적으로 계산되므로 LLM 검증 불필요
 
 def _build_graph() -> StateGraph:
     graph = StateGraph(AssetPortfolioState)

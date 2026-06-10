@@ -22,10 +22,17 @@ class _AllocationItem(BaseModel):
 
 
 class _RebalancePlan(BaseModel):
+    reasoning: str = Field(
+        default="",
+        description=(
+            "배분 결정 전 상황 분석. 소비 패턴, 저축 여력, 계좌 상태, "
+            "PorTI 성향과의 트레이드오프를 2~3문장으로 정리"
+        ),
+    )
     invest_amount: int = Field(default=0, description="투자로 별도 운용할 절대 금액(원)")
     allocations: list[_AllocationItem] = Field(
         default_factory=list,
-        description="나머지 금액을 배분할 계좌 목록 (amount는 가처분소득 대비 금액)",
+        description="나머지 금액을 배분할 계좌 목록",
     )
 
 
@@ -35,38 +42,64 @@ class RebalanceState(TypedDict):
     spendable: int
     porti_type: str
     porti_comment: str
-    expense_summary: str
-    asset_list: list[dict]
+    category_list: list[dict]       # 원본: [{name, expense}]
+    category_details: list[dict]    # 계산 후: [{name, expense, ratio}]
+    category_total: int             # 변동지출 합계
+    savings_capacity: int           # 저축 가능액 = 가처분소득 - 변동지출
+    asset_list: list[dict]          # [{asset_id, asset_type, account_name, balance}]
     invest_amount: int
     allocations: list[dict]
 
 
+def _diagnose(state: RebalanceState) -> RebalanceState:
+    """소비 패턴 구조화 + 저축 여력 계산. LLM 없이 순수 계산."""
+    salary = state["salary"]
+
+    category_details = [
+        {
+            "name": c["name"],
+            "expense": c["expense"],
+            "ratio": round(c["expense"] / salary * 100, 1) if salary > 0 else 0.0,
+        }
+        for c in state["category_list"]
+    ]
+
+    category_total = sum(c["expense"] for c in state["category_list"])
+    savings_capacity = state["spendable"] - category_total
+
+    return {
+        **state,
+        "category_details": category_details,
+        "category_total": category_total,
+        "savings_capacity": savings_capacity,
+    }
+
+
 _SYSTEM = (
-    "당신은 월급 쪼개기 전문가입니다.\n"
-    "가처분소득(= 월급 - 고정지출)을 투자금과 생활비 항목들로 나눕니다.\n\n"
-    "배분 순서:\n"
-    "  1단계: 가처분소득에서 투자 운용금(invest_amount)을 먼저 분리합니다.\n"
-    "  2단계: 나머지(가처분소득 - invest_amount)를 생활비·비상금 등 항목별로 계좌에 배분합니다.\n\n"
-    "규칙:\n"
-    "- invest_amount: 투자 운용 절대 금액(원), 가처분소득을 초과할 수 없음\n"
-    "  * 투자형 (FENCING·CYCLING): 가처분소득의 40~60%\n"
-    "  * 중립형 (JUDO·RHYTHMIC):   가처분소득의 20~35%\n"
-    "  * 안전형 (SWIMMING·ARCHERY): 가처분소득의 10~20%\n"
-    "- allocations: 나머지 가처분소득을 배분할 계좌 목록\n"
-    "  - asset_id: 보유 계좌 목록의 실제 UUID (절대 변경 금지, 중복 사용 금지)\n"
-    "  - account_purpose: 한글 용도명 (생활비, 비상금, 용돈, 교통비, 저축 등)\n"
-    "                     ※ CHECKING/SAVINGS 같은 영문 코드 금지, 반드시 한글\n"
-    "  - amount: 가처분소득 중 배분할 금액(원)\n"
-    "  - comment: 이 계좌에 이 금액을 배분하는 이유 한 줄\n"
+    "당신은 사용자의 월급을 맞춤 설계해주는 재무 어드바이저입니다.\n\n"
+    "반드시 아래 순서로 생각하고 결정하세요.\n\n"
+    "1단계 — reasoning (결정 전 반드시 먼저 작성)\n"
+    "  아래 질문에 답하며 이 사람의 상황을 파악하세요:\n"
+    "  · 소비 패턴에서 눈에 띄는 항목이 있는가? (소득 대비 비율 기준)\n"
+    "  · 저축 가능액이 충분한가, 빠듯한가?\n"
+    "  · 잔액 0원인 계좌가 있는가? 비상금이 없는 상황인가?\n"
+    "  · PorTI 성향 vs 현재 재무 상황 — 어떤 트레이드오프가 있는가?\n"
+    "  → 이 분석을 reasoning 필드에 2~3문장으로 정리하세요.\n\n"
+    "2단계 — 배분 결정\n"
+    "  1단계 reasoning을 바탕으로 금액을 결정하세요.\n"
+    "  각 계좌 comment는 reasoning에서 나온 실제 근거를 담아 1문장으로 쓰세요.\n\n"
+    "출력 규칙:\n"
+    "- reasoning: 배분 결정 전 상황 분석 (2~3문장)\n"
+    "- invest_amount: 투자 운용금(원), 가처분소득 초과 불가\n"
+    "- allocations:\n"
+    "  - asset_id: 보유 계좌의 실제 UUID (변경·중복 금지)\n"
+    "  - account_purpose: 한글 용도명 (생활비, 비상금, 용돈, 저축 등)\n"
+    "  - amount: 배분 금액(원)\n"
+    "  - comment: reasoning 기반, 실제 수치 언급 1문장\n"
+    "    예) '식비가 소득의 14.7%라 생활비를 넉넉히 잡았어요'\n"
+    "    예) '파킹통장 잔액이 0원이라 비상금부터 채워드렸어요'\n"
     "- 핵심 제약: invest_amount + sum(amount) = 가처분소득\n"
-    "- 이모지, 이모티콘 사용 금지\n\n"
-    "예시 (가처분소득 3,600,000원 / 균형형):\n"
-    '{"invest_amount": 900000, "allocations": [\n'
-    '  {"asset_id": "uuid-A", "account_purpose": "생활비", "amount": 1800000, "comment": "식비·생활용품 등 변동 지출 충당"},\n'
-    '  {"asset_id": "uuid-B", "account_purpose": "비상금", "amount": 540000, "comment": "예비 지출 및 비상금 적립"},\n'
-    '  {"asset_id": "uuid-C", "account_purpose": "용돈",   "amount": 360000, "comment": "개인 용돈 및 여가비"}\n'
-    "]}\n"
-    "위 예시에서 invest_amount(900,000) + 1,800,000 + 540,000 + 360,000 = 3,600,000"
+    "- 이모지·이모티콘 사용 금지\n"
 )
 
 
@@ -74,8 +107,15 @@ async def _plan_rebalance(state: RebalanceState) -> RebalanceState:
     spendable = state["spendable"]
     default_invest = round(spendable * 0.25)
 
+    # 소비 패턴: 카테고리별 금액 + 소득 대비 비율
+    category_lines = "\n".join(
+        f"  - {c['name']}: {c['expense']:,}원 (소득의 {c['ratio']}%)"
+        for c in state["category_details"]
+    ) or "  소비 내역 없음"
+
+    # 계좌 목록: 잔액 포함
     asset_lines = "\n".join(
-        f"  - asset_id: {a['asset_id']}, {a['account_name']} ({a['asset_type']})"
+        f"  - asset_id: {a['asset_id']}, {a['account_name']} ({a['asset_type']}) 잔액: {a['balance']:,}원"
         for a in state["asset_list"]
     ) or "  보유 계좌 없음"
 
@@ -83,11 +123,14 @@ async def _plan_rebalance(state: RebalanceState) -> RebalanceState:
         SystemMessage(content=_SYSTEM),
         HumanMessage(content=(
             f"월급: {state['salary']:,}원\n"
-            f"고정지출(이미 별도 처리됨): {state['fixed_expense']:,}원\n"
+            f"고정지출(별도 처리됨): {state['fixed_expense']:,}원\n"
             f"가처분소득: {spendable:,}원\n\n"
-            f"PorTI 유형: {porti_label(state['porti_type'])} — {state['porti_comment']}\n"
-            f"최근 변동지출 패턴: {state['expense_summary']}\n\n"
-            f"보유 계좌 목록 (allocations의 asset_id는 아래 UUID만 사용):\n{asset_lines}"
+            f"PorTI 유형: {state['porti_type']} — {state['porti_comment']}\n\n"
+            f"소비 패턴 (3개월 월평균):\n{category_lines}\n"
+            f"변동지출 합계: {state['category_total']:,}원\n"
+            f"저축 가능액: {state['savings_capacity']:,}원 "
+            f"(소득의 {round(state['savings_capacity']/state['salary']*100, 1) if state['salary'] > 0 else 0}%)\n\n"
+            f"보유 계좌 (allocations의 asset_id는 아래 UUID만 사용):\n{asset_lines}"
         )),
     ]
 
@@ -142,15 +185,34 @@ async def _plan_rebalance(state: RebalanceState) -> RebalanceState:
         return {**state, "invest_amount": default_invest, "allocations": []}
 
 
+def _build_graph() -> StateGraph:
+    graph = StateGraph(RebalanceState)
+    graph.add_node("diagnose", _diagnose)
+    graph.add_node("plan", _plan_rebalance)
+    graph.set_entry_point("diagnose")
+    graph.add_edge("diagnose", "plan")
+    graph.add_edge("plan", END)
+    return graph.compile()
+
+
+_graph = _build_graph()
+
 
 async def rebalance_salary(request: RebalanceRequest) -> RebalanceResponse:
     spendable = request.salary - request.fixed_expense
-    expense_summary = ", ".join(
-        f"{e.name} {e.expense:,}원" for e in request.category_expense
-    ) or "데이터 없음"
+
+    category_list = [
+        {"name": e.name, "expense": e.expense}
+        for e in request.category_expense
+    ]
 
     asset_list = [
-        {"asset_id": str(a.asset_id), "asset_type": a.asset_type, "account_name": a.account_name}
+        {
+            "asset_id": str(a.asset_id),
+            "asset_type": a.asset_type,
+            "account_name": a.account_name,
+            "balance": a.balance,
+        }
         for a in request.assets
     ]
 
@@ -160,7 +222,10 @@ async def rebalance_salary(request: RebalanceRequest) -> RebalanceResponse:
         "spendable": spendable,
         "porti_type": request.porti_type,
         "porti_comment": request.porti_comment,
-        "expense_summary": expense_summary,
+        "category_list": category_list,
+        "category_details": [],
+        "category_total": 0,
+        "savings_capacity": 0,
         "asset_list": asset_list,
         "invest_amount": 0,
         "allocations": [],
