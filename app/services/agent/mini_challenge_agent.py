@@ -89,7 +89,7 @@ async def _fetch_prices_text() -> str:
     prices = await get_all_prices()
     if not prices:
         return "주가 조회 실패"
-    return "\n".join(f"- {name}({ticker}): {price:,}원" for name, ticker, price in prices)
+    return "\n".join(f"- {ticker}: {price:,}원" for _, ticker, price in prices)
 
 
 # ── 엔드포인트 핸들러 ─────────────────────────────────────────────────────────
