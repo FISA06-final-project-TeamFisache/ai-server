@@ -34,6 +34,7 @@ from app.services.agent.gather_products import GATHER_PRODUCTS
 logger = logging.getLogger(__name__)
 
 _EMBED_MODEL = "text-embedding-3-small"
+_embeddings = OpenAIEmbeddings(model=_EMBED_MODEL)
 MYSQL_URL = os.getenv("MYSQL_URL", "")
 _WOORI_BANK = "우리은행"
 _WOORI_INVEST = "우리투자증권"
@@ -161,8 +162,9 @@ def _candidates_text(etf_candidates: list[dict]) -> str:
     return "\n".join(
         f"- [{p['product_type']}] {p['institution']} | {p['name']} "
         f"| ticker:{p.get('ticker') or ''} | 연 {p['interest_rate'] or '-'}% "
-        f"| 시가총액:{_fmt_mktcap(p.get('mktcap'))} | 일평균거래대금:{_fmt_mktcap(p.get('avg_trading_value'))} "
+        f"| 거래대금:{_fmt_mktcap(p.get('avg_trading_value'))} "
         f"| 연변동성:{str(round(float(p['volatility']), 1)) + '%' if p.get('volatility') else '-'} "
+        f"| 기초지수:{p.get('idx_ind_nm') or '-'} "
         f"| {(p['description'] or '')[:80]}"
         for p in etf_candidates
     ) or "상품 없음"
@@ -279,7 +281,7 @@ async def _get_embedding(text: str) -> list[float] | None:
     if not text.strip():
         return None
     try:
-        return await OpenAIEmbeddings(model=_EMBED_MODEL).aembed_query(text)
+        return await _embeddings.aembed_query(text)
     except Exception as e:
         logger.warning("임베딩 생성 실패: %s", e)
         return None
@@ -400,6 +402,7 @@ async def _search_etfs_db(
     max_volatility: float | None = None,
     min_cagr: float | None = None,
     name_contains: list[str] | None = None,
+    idx_ind_nm: list[str] | None = None,
     limit: int = 15,
 ) -> list[dict]:
     """pgvector hybrid search: SQL 조건 필터 + 관심사 벡터 유사도 정렬."""
@@ -429,23 +432,31 @@ async def _search_etfs_db(
             idx += 1
         conditions.append(f"({' OR '.join(kw_conds)})")
 
+    if idx_ind_nm:
+        kw_conds = []
+        for kw in idx_ind_nm:
+            kw_conds.append(f"idx_ind_nm LIKE ${idx}")
+            params.append(f"%{kw}%")
+            idx += 1
+        conditions.append(f"({' OR '.join(kw_conds)})")
+
     where = " AND ".join(conditions)
+    select_cols = (
+        "product_type, institution, name, ticker, interest_rate, description, "
+        "avg_trading_value, acc_trdvol, idx_ind_nm, close_prc, nav, volatility"
+    )
 
     if user_embedding:
         vec_str = "[" + ",".join(f"{x:.8f}" for x in user_embedding) + "]"
         query = (
-            "SELECT product_type, institution, name, ticker, interest_rate, description, "
-            "mktcap, avg_trading_value, volatility "
-            f"FROM products WHERE {where} "
+            f"SELECT {select_cols} FROM products WHERE {where} "
             f"ORDER BY embedding <=> ${idx}::vector "
             f"LIMIT ${idx + 1}"
         )
         params.extend([vec_str, limit])
     else:
         query = (
-            "SELECT product_type, institution, name, ticker, interest_rate, description, "
-            "mktcap, avg_trading_value, volatility "
-            f"FROM products WHERE {where} "
+            f"SELECT {select_cols} FROM products WHERE {where} "
             f"ORDER BY interest_rate DESC NULLS LAST "
             f"LIMIT ${idx}"
         )
@@ -459,23 +470,6 @@ async def _search_etfs_db(
         return []
 
 
-@tool
-def _search_etf_schema(
-    max_volatility: float | None = None,
-    min_cagr: float | None = None,
-    name_contains: list[str] | None = None,
-    limit: int = 15,
-) -> str:
-    """DB에서 조건에 맞는 ETF를 검색합니다.
-    max_volatility: 최대 연변동성(%). 예) 20.0
-    min_cagr: 최소 연평균수익률(%). 예) 5.0
-    name_contains: ETF명에 포함돼야 할 키워드 목록. 예) ["채권", "배당"]
-    limit: 최대 반환 개수 (기본 15)
-    """
-    _ = max_volatility, min_cagr, name_contains, limit
-    return ""
-
-
 # ── Flow Agent (per-flow worker) ──────────────────────────────────────────────
 
 
@@ -486,10 +480,45 @@ async def _select_flow_products(plan: dict, shared: dict) -> tuple[list[dict], l
     Returns: (portfolio_items, latest_candidates)
     """
     user_embedding = shared.get("user_embedding")
+
+    # user_embedding을 클로저로 캡처 — LLM 스키마에는 노출되지 않음
+    @tool
+    async def search_etfs(
+        max_volatility: float | None = None,
+        min_cagr: float | None = None,
+        name_contains: list[str] | None = None,
+        idx_ind_nm: list[str] | None = None,
+        limit: int = 15,
+    ) -> list[dict]:
+        """DB에서 조건에 맞는 ETF를 검색합니다.
+        max_volatility: 최대 연변동성(%). 예) 20.0
+        min_cagr: 최소 연평균수익률(%). 예) 5.0
+        name_contains: ETF명에 포함돼야 할 키워드 목록. 예) ["채권", "배당"]
+        idx_ind_nm: 기초지수명에 포함돼야 할 키워드 목록. 예) ["S&P", "미국채", "코스피"]
+        limit: 최대 반환 개수 (기본 15)
+        """
+        return await _search_etfs_db(
+            user_embedding,
+            max_volatility=max_volatility,
+            min_cagr=min_cagr,
+            name_contains=name_contains,
+            idx_ind_nm=idx_ind_nm,
+            limit=limit,
+        )
+
     llm = ChatOpenAI(
         model=os.getenv("LLM_MODEL", "gpt-4o-mini-2024-07-18"),
         temperature=float(os.getenv("LLM_TEMPERATURE", "0.2")),
-    ).bind_tools([_search_etf_schema])
+    ).bind_tools([search_etfs])
+
+    _user_ctx = (
+        f"계좌 유형: {plan['account_type']}\n"
+        f"흐름: {plan['flow_type']} ({plan['term']}, {plan['investment_months']}개월)\n"
+        f"투자 전략: {plan['invest_strategy'] or '흐름 성격에 맞게 분산 구성'}\n"
+        f"PorTI: {_porti_label(shared['porti_type'])} / {shared['porti_comment']}\n"
+        f"관심사: {shared['interest']}\n"
+        f"투자 관심 분야: {', '.join(shared['invest_interests']) or '없음'}"
+    )
 
     tool_messages = [
         SystemMessage(content=(
@@ -498,14 +527,7 @@ async def _select_flow_products(plan: dict, shared: dict) -> tuple[list[dict], l
             "IRP·PENSION_SAVINGS 계좌인 경우 주식·채권·해외 자산군을 반드시 분산하세요.\n"
             "결과가 충분하면 도구를 더 이상 호출하지 마세요."
         )),
-        HumanMessage(content=(
-            f"계좌 유형: {plan['account_type']}\n"
-            f"흐름: {plan['flow_type']} ({plan['term']}, {plan['investment_months']}개월)\n"
-            f"투자 전략: {plan['invest_strategy'] or '흐름 성격에 맞게 분산 구성'}\n"
-            f"PorTI: {_porti_label(shared['porti_type'])} / {shared['porti_comment']}\n"
-            f"관심사: {shared['interest']}\n"
-            f"투자 관심 분야: {', '.join(shared['invest_interests']) or '없음'}"
-        )),
+        HumanMessage(content=_user_ctx),
     ]
 
     # 초기 fallback: 필터 없이 관심사 기반 검색
@@ -517,19 +539,11 @@ async def _select_flow_products(plan: dict, shared: dict) -> tuple[list[dict], l
         if not response.tool_calls:
             break
         for tc in response.tool_calls:
-            if tc["name"] == _search_etf_schema.name:
-                args = tc["args"]
-                new_candidates = await _search_etfs_db(
-                    user_embedding=user_embedding,
-                    max_volatility=args.get("max_volatility"),
-                    min_cagr=args.get("min_cagr"),
-                    name_contains=args.get("name_contains"),
-                    limit=int(args.get("limit", 15)),
-                )
-                if new_candidates:
-                    latest_candidates = new_candidates
-                tool_result = _candidates_text(latest_candidates) if latest_candidates else "조건을 충족하는 ETF 없음"
-                tool_messages.append(ToolMessage(content=tool_result, tool_call_id=tc["id"]))
+            new_candidates = await search_etfs.ainvoke(tc["args"])
+            if new_candidates:
+                latest_candidates = new_candidates
+            tool_result = _candidates_text(latest_candidates) if latest_candidates else "조건을 충족하는 ETF 없음"
+            tool_messages.append(ToolMessage(content=tool_result, tool_call_id=tc["id"]))
 
     confirmed_by_name = {p["name"]: p for p in latest_candidates}
     filtered_text = _candidates_text(latest_candidates)
@@ -546,15 +560,7 @@ async def _select_flow_products(plan: dict, shared: dict) -> tuple[list[dict], l
             "- comment: 이 ETF의 수치(변동성·CAGR)와 흐름 전략이 맞는 이유 1문장. 수익 보장 표현 금지.\n"
             'JSON만 응답: {"portfolio":[{"name":"정확한상품명","ticker":"코드","comment":"이유"}]}'
         )),
-        HumanMessage(content=(
-            f"계좌 유형: {plan['account_type']}\n"
-            f"흐름: {plan['flow_type']} ({plan['term']}, {plan['investment_months']}개월)\n"
-            f"투자 전략: {plan['invest_strategy'] or '흐름 성격에 맞게 분산 구성'}\n"
-            f"PorTI: {_porti_label(shared['porti_type'])} / {shared['porti_comment']}\n"
-            f"관심사: {shared['interest']}\n"
-            f"투자 관심 분야: {', '.join(shared['invest_interests']) or '없음'}\n\n"
-            f"[선택 가능 상품 목록]\n{filtered_text}"
-        )),
+        HumanMessage(content=_user_ctx + f"\n\n[선택 가능 상품 목록]\n{filtered_text}"),
     ]
 
     result = await ainvoke_structured(selection_messages, _PortfolioOutput)
