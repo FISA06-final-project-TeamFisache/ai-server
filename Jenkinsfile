@@ -18,7 +18,7 @@ pipeline {
                         --region ${AWS_REGION} \
                         --instance-ids ${INSTANCE_ID} \
                         --document-name AWS-RunShellScript \
-                        --parameters '{"commands":["export HOME=/root && git config --global --add safe.directory /opt/ai-server && docker network create wooriport-network 2>/dev/null || true && cd /opt/ai-server && git pull origin service && docker compose up --build -d"]}' \
+                        --parameters '{"commands":["export HOME=/root && git config --global --add safe.directory /opt/ai-server && docker network create wooriport-network 2>/dev/null || true && cd /opt/ai-server && git fetch origin && git reset --hard origin/service && docker compose up --build -d"]}' \
                         --query "Command.CommandId" \
                         --output text)
 
