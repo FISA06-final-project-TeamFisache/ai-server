@@ -127,6 +127,21 @@ def normalize_amounts(items: list[dict], key: str, target: int) -> list[dict]:
         result[-1] = {**result[-1], key: max(0, result[-1][key] + diff)}
     return result
 
+def normalize_to_thousands(items: list[dict], key: str, total: int) -> list[dict]:
+    """비례 배분 후 천원 단위 반올림. 합계는 total의 천원 내림값에 맞춤."""
+    if not items or total <= 0:
+        return items
+    total_1000 = (total // 1000) * 1000
+    if total_1000 == 0:
+        return [{**v, key: 0} for v in items]
+    total_weight = sum(v[key] for v in items) or 1
+    scale = total_1000 / total_weight
+    result = [{**v, key: round(v[key] * scale / 1000) * 1000} for v in items]
+    diff = total_1000 - sum(v[key] for v in result)
+    if diff != 0:
+        max_idx = max(range(len(result)), key=lambda i: result[i][key])
+        result[max_idx] = {**result[max_idx], key: max(0, result[max_idx][key] + diff)}
+    return result
 
 # ── ETF price fetch (sync, run via executor) ─────────────────────────────────
 

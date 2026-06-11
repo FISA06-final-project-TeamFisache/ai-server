@@ -1,8 +1,8 @@
 """
 ETF 데이터 파이프라인
 
-  STEP 1 — load_etf_prices: KRX 수집 → MySQL 가격 + PostgreSQL products upsert
-  STEP 2 — load_products  : MySQL → interest_rate · volatility → PostgreSQL 갱신
+  STEP 1 — load_etf_prices: KRX 수집 → MySQL 가격 적재
+  STEP 2 — load_products  : KRX 종목 조회 → MySQL 교차 필터 → PostgreSQL upsert + 지표 갱신
 
 사용법:
   python scripts/pipeline.py              # 최근 30일
@@ -32,7 +32,7 @@ async def run(start_dt: date, end_dt: date) -> None:
     print("=" * 60)
     print("STEP 2 / 2  —  load_products")
     print("=" * 60)
-    await load_products.async_main()
+    await load_products.async_main(end_dt)
 
     print()
     print("파이프라인 완료")
