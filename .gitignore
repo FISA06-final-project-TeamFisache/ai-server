@@ -12,3 +12,4 @@ build/
 models/*.pkl
 package-lock.json
 package.json
+venv/
