@@ -49,8 +49,10 @@ class _AdjustAIOutput(BaseModel):
 # ── 시스템 프롬프트 ────────────────────────────────────────────────────────────
 
 _SUB_TYPE_MAP = (
-    "COFFEE(카페·음료), DELIVERY(배달음식), ALCOHOL(주류·술자리), "
-    "LATE_NIGHT(야식), LUNCH(점심·외식), SHOPPING(쇼핑·의류), TAXI(택시·교통)"
+    "COFFEE(카페·음료), "
+    "DELIVERY(배달음식 — sender_name에 배달의민족·요기요·쿠팡이츠가 포함된 식비 항목), "
+    "ALCOHOL(주류·술자리), LATE_NIGHT(야식), LUNCH(점심·외식), "
+    "SHOPPING(쇼핑·의류), TAXI(택시·교통)"
 )
 
 _INIT_SYSTEM = (
@@ -58,12 +60,20 @@ _INIT_SYSTEM = (
     "아래 순서대로 미니 챌린지를 제안하세요.\n\n"
     "1단계 — challenge_sub_type 선정:\n"
     f"   소비 금액이 가장 많은 카테고리를 분석해 아래 중 정확히 하나를 선택합니다.\n"
-    f"   {_SUB_TYPE_MAP}\n\n"
+    f"   {_SUB_TYPE_MAP}\n"
+    "   ※ DELIVERY: 배달의민족·요기요·쿠팡이츠 등 배달앱이 sender_name에 포함된 항목은 모두 합산해 DELIVERY 소비 총액으로 계산합니다.\n\n"
     "2단계 — 챌린지 설계:\n"
     "   선정한 challenge_sub_type을 기준으로 나머지 필드를 결정합니다.\n"
     "   - challenge_type: 횟수 제한 → COUNT / 금액 제한 → AMOUNT\n"
-    "   - target: 목표값 (COUNT → 횟수, AMOUNT → 금액(원))\n"
-    "   - estimated_saving: 챌린지 완수 시 예상 절약 금액(원)\n\n"
+    "   - target: 목표값 (COUNT → 횟수, AMOUNT → 한달 소비 한도(원))\n"
+    "     ※ AMOUNT일 때 target은 반드시 해당 카테고리의 이번 달 소비 총액보다 작아야 합니다.\n"
+    "       target ≥ 소비 총액이면 평소대로 써도 챌린지가 통과되므로 행동 변화가 없습니다.\n"
+    "   - estimated_saving: 소비 총액 − target (원)\n"
+    "   - description: 아래 순서로 2~3문장 작성합니다.\n"
+    "     1) 해당 카테고리 이번 달 소비 금액 언급\n"
+    "     2) 챌린지 목표(target) 안내\n"
+    "     3) 절약 금액(estimated_saving)으로 주식 투자에 가까워진다는 동기 부여\n"
+    "     예) '이번 달 배달 음식에 450,000원을 쓰셨어요. 이번 달은 400,000원 이하로 줄여봐요! 절약한 50,000원으로 주식 투자에 한 걸음 더 가까워질 수 있어요.'\n\n"
     "3단계 — ticker 선택:\n"
     "   아래 현재 주가 목록에서 소비 카테고리와 관심 테마에 맞는 종목 1개를 선택합니다."
 )
@@ -74,13 +84,21 @@ _ADJUST_SYSTEM = (
     "1단계 — challenge_sub_type 선정:\n"
     f"   반드시 아래 중 정확히 하나를 선택합니다.\n"
     f"   {_SUB_TYPE_MAP}\n"
+    "   ※ DELIVERY: 배달의민족·요기요·쿠팡이츠 등 배달앱이 sender_name에 포함된 항목은 모두 합산해 DELIVERY 소비 총액으로 계산합니다.\n"
     "   - '더 쉽게/어렵게': 직전 챌린지와 같은 sub_type 유지\n"
     "   - '주제를 바꿔주세요': 직전과 다른 sub_type 선택\n"
     "   - previous_proposals에 있는 챌린지 절대 반복 금지\n\n"
     "2단계 — 챌린지 조정:\n"
-    "   - '더 쉽게': target 늘리기\n"
-    "   - '더 어렵게': target 줄이기\n"
-    "   - '주제를 바꿔주세요': 소비 데이터 기반 새 챌린지 설계\n\n"
+    "   - '더 쉽게': target을 늘려 감소 폭을 줄입니다.\n"
+    "     단, AMOUNT일 때 target은 반드시 해당 카테고리 소비 총액 미만으로 유지해야 합니다.\n"
+    "     target ≥ 소비 총액이면 평소대로 소비해도 챌린지가 통과되므로 의미가 없습니다.\n"
+    "   - '더 어렵게': target을 줄여 감소 폭을 늘립니다.\n"
+    "   - '주제를 바꿔주세요': 소비 데이터 기반 새 챌린지 설계\n"
+    "   - description: 아래 순서로 2~3문장 작성합니다.\n"
+    "     1) 해당 카테고리 이번 달 소비 금액 언급\n"
+    "     2) 챌린지 목표(target) 안내\n"
+    "     3) 절약 금액(estimated_saving)으로 주식 투자에 가까워진다는 동기 부여\n"
+    "     예) '이번 달 배달 음식에 450,000원을 쓰셨어요. 이번 달은 400,000원 이하로 줄여봐요! 절약한 50,000원으로 주식 투자에 한 걸음 더 가까워질 수 있어요.'\n\n"
     "3단계 — ticker 선택:\n"
     "   아래 현재 주가 목록에서 적합한 종목 1개를 선택합니다."
 )
@@ -99,12 +117,13 @@ async def propose_mini_challenge(req: MiniChallengeRequest) -> MiniChallengeResp
     session = await get_session(req.user_id)
 
     session["category_expense"] = [
-        {"category": c.category, "amount": c.amount} for c in req.category_expense
+        {"category": c.category, "amount": c.amount, "sender_name": c.sender_name}
+        for c in req.category_expense
     ]
     session["stock_themes"] = req.stock_themes
 
     cats = "\n".join(
-        f"- {c.category}: {c.amount:,}원"
+        f"- {c.category}({c.sender_name}): {c.amount:,}원"
         for c in sorted(req.category_expense, key=lambda x: x.amount, reverse=True)
     ) or "소비 데이터 없음"
     themes_text = ", ".join(req.stock_themes) if req.stock_themes else "없음"
@@ -139,7 +158,7 @@ async def adjust_challenge(req: AdjustRequest) -> AdjustResponse:
 
     cats_raw = session.get("category_expense", [])
     cats = "\n".join(
-        f"- {c['category']}: {c['amount']:,}원"
+        f"- {c['category']}({c.get('sender_name', '')}): {c['amount']:,}원"
         for c in sorted(cats_raw, key=lambda x: x["amount"], reverse=True)
     ) or "소비 데이터 없음"
 
