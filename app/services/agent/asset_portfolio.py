@@ -25,12 +25,7 @@ from app.services.agent.tools import (
     calculate_hrp_weights,
     search_etfs,
 )
-from app.services.agent.porti_types import (
-    porti_label as _porti_label,
-    STABLE_PORTI_TYPES,
-    NEUTRAL_PORTI_TYPES,
-    INVEST_PORTI_TYPES,
-)
+from app.services.agent.porti_types import porti_label as _porti_label
 from app.services.agent.gather_products import GATHER_PRODUCTS
 
 logger = logging.getLogger(__name__)
@@ -118,16 +113,20 @@ def _find_best_product(account_type: str, prefer_institution: str) -> dict | Non
 def _validate_and_merge(
     raw_items: list[_AIPortfolioItem],
     confirmed_by_name: dict[str, dict],
+    confirmed_by_ticker: dict[str, dict] | None = None,
 ) -> list[dict]:
     validated: list[dict] = []
     for item in raw_items:
-        name = item.name
-        if name not in confirmed_by_name:
-            logger.warning("상품명 목록 미존재, 제거: %s", name)
+        p = confirmed_by_name.get(item.name)
+        if p is None and confirmed_by_ticker and item.ticker:
+            p = confirmed_by_ticker.get(item.ticker)
+            if p:
+                logger.info("ticker 기반 매칭: %s → %s", item.ticker, p["name"])
+        if p is None:
+            logger.warning("상품 미존재 (name=%s, ticker=%s), 제거", item.name, item.ticker)
             continue
-        p = confirmed_by_name[name]
         validated.append({
-            "name": name,
+            "name": p["name"],
             "ticker": p.get("ticker") or item.ticker or "",
             "product_type": p.get("product_type", "ETF"),
             "interest_rate": float(p.get("interest_rate") or 0.0),
@@ -281,22 +280,6 @@ async def _plan_flows(state: AssetPortfolioState) -> dict:
 
 # ── ETF 검색 + 포트폴리오 구성 (agentic, 슬롯 기반) ──────────────────────────────
 
-_VOLATILITY_CAP: dict[tuple[str, str], float | None] = {
-    ("STABLE", "단기"): 10.0,  ("STABLE", "중기"): 15.0,  ("STABLE", "장기"): 20.0,
-    ("NEUTRAL", "단기"): 15.0, ("NEUTRAL", "중기"): 25.0, ("NEUTRAL", "장기"): 30.0,
-    ("INVEST", "단기"): 25.0,  ("INVEST", "중기"): None,  ("INVEST", "장기"): None,
-}
-
-
-def _resolve_max_volatility(porti_type: str, term: str) -> float | None:
-    if porti_type in STABLE_PORTI_TYPES:
-        group = "STABLE"
-    elif porti_type in NEUTRAL_PORTI_TYPES:
-        group = "NEUTRAL"
-    else:
-        group = "INVEST"
-    return _VOLATILITY_CAP.get((group, term))
-
 
 _SYSTEM_BUILD_PORTFOLIO = (
     "포트폴리오 전문가입니다.\n\n"
@@ -324,7 +307,6 @@ async def _node_build_portfolio(flow_state: FlowExecuteState) -> FlowExecuteStat
     if not plan["can_invest"]:
         return {**flow_state, "portfolio": []}
 
-    max_volatility = _resolve_max_volatility(shared["porti_type"], plan["term"])
     base_query_parts = list(shared["invest_interests"])
     all_candidates: dict[str, dict] = {}
 
@@ -345,9 +327,7 @@ async def _node_build_portfolio(flow_state: FlowExecuteState) -> FlowExecuteStat
         if not response.tool_calls:
             break
         for tc in response.tool_calls:
-            # max_volatility는 PorTI 규칙 값으로 주입 — LLM이 설정한 값 무시
-            args = {**tc["args"], "max_volatility": max_volatility}
-            tool_result = await search_etfs.ainvoke(args)
+            tool_result = await search_etfs.ainvoke(tc["args"])
             for item in (tool_result or []):
                 all_candidates[item["name"]] = item
             messages.append(ToolMessage(
@@ -360,14 +340,17 @@ async def _node_build_portfolio(flow_state: FlowExecuteState) -> FlowExecuteStat
         _PortfolioOutput,
     )
     raw_items = result.portfolio if result else []
-    portfolio = _validate_and_merge(raw_items, all_candidates)
+    by_ticker = {r["ticker"]: r for r in all_candidates.values() if r.get("ticker")}
+    portfolio = _validate_and_merge(raw_items, all_candidates, by_ticker)
 
     if not portfolio:
         logger.info("[%s] 포트폴리오 구성 실패 → 기본 유사도 검색 폴백", plan["flow_type"])
-        fallback_rows = await search_etfs.ainvoke({"keywords": base_query_parts, "max_volatility": None})
+        fallback_rows = await search_etfs.ainvoke({"keywords": base_query_parts})
         if fallback_rows:
             fallback_items = [_AIPortfolioItem(name=r["name"], ticker=r.get("ticker", "")) for r in fallback_rows[:3]]
-            portfolio = _validate_and_merge(fallback_items, {r["name"]: r for r in fallback_rows[:3]})
+            fb_by_name = {r["name"]: r for r in fallback_rows[:3]}
+            fb_by_ticker = {r["ticker"]: r for r in fallback_rows[:3] if r.get("ticker")}
+            portfolio = _validate_and_merge(fallback_items, fb_by_name, fb_by_ticker)
 
     return {**flow_state, "portfolio": portfolio}
 
