@@ -12,7 +12,10 @@ import pandas as pd
 import pymysql
 import yfinance as yf
 from langchain_core.tools import tool
+from langchain_openai import OpenAIEmbeddings
 from pypfopt.hierarchical_portfolio import HRPOpt
+
+from app.services.rag.db import get_pool
 
 logger = logging.getLogger(__name__)
 
@@ -253,3 +256,92 @@ async def calculate_hrp_weights(tickers: list[str]) -> dict:
     except Exception as e:
         logger.warning("HRP 계산 실패 → 균등 배분: %s", e)
         return _equal()
+
+
+# ── ETF 벡터 검색 ─────────────────────────────────────────────────────────────
+
+_embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+
+
+async def _get_embedding(text: str) -> list[float] | None:
+    if not text.strip():
+        return None
+    try:
+        return await _embeddings.aembed_query(text)
+    except Exception as e:
+        logger.warning("임베딩 생성 실패: %s", e)
+        return None
+
+
+async def _search_etfs_db(
+    query_parts: list[str],
+    max_volatility: float | None = None,
+    limit: int = 15,
+) -> list[dict]:
+    """pgvector hybrid search: 변동성 필터 + 관심사 벡터 유사도 정렬."""
+    pool = await get_pool()
+    if not pool:
+        return []
+
+    user_embedding = await _get_embedding(" ".join(query_parts)) if query_parts else None
+
+    conditions = ["deleted_at IS NULL"]
+    params: list = []
+    idx = 1
+
+    if max_volatility is not None:
+        conditions.append(f"volatility <= ${idx}")
+        params.append(float(max_volatility))
+        idx += 1
+
+    where = " AND ".join(conditions)
+    select_cols = (
+        "product_type, institution, name, ticker, interest_rate, description, "
+        "avg_trading_value, acc_trdvol, idx_ind_nm, close_prc, nav, volatility"
+    )
+
+    if user_embedding:
+        vec_str = "[" + ",".join(f"{x:.8f}" for x in user_embedding) + "]"
+        query = (
+            f"SELECT {select_cols} FROM products WHERE {where} "
+            f"ORDER BY embedding <=> ${idx}::vector "
+            f"LIMIT ${idx + 1}"
+        )
+        params.extend([vec_str, limit])
+    else:
+        query = (
+            f"SELECT {select_cols} FROM products WHERE {where} "
+            f"ORDER BY interest_rate DESC NULLS LAST "
+            f"LIMIT ${idx}"
+        )
+        params.append(limit)
+
+    try:
+        rows = await pool.fetch(query, *params)
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.warning("ETF DB 검색 실패: %s", e)
+        return []
+
+
+@tool
+async def search_etfs(
+    keywords: list[str],
+    max_volatility: float | None = None,
+) -> list[dict]:
+    """포트폴리오 슬롯에 맞는 ETF를 검색합니다.
+    keywords: 자산군·테마 키워드 목록. 예) ["글로벌 주식", "채권", "S&P500"]
+    max_volatility: 연변동성 상한(%). 시스템 관리값 — 직접 설정하지 마세요.
+    """
+    results = await _search_etfs_db(keywords, max_volatility=max_volatility, limit=10)
+    return [
+        {
+            "name": r["name"],
+            "ticker": r.get("ticker", ""),
+            "volatility": round(float(r["volatility"]), 1) if r.get("volatility") else None,
+            "description": (r.get("description") or "")[:80],
+            "product_type": r.get("product_type", "ETF"),
+            "interest_rate": float(r.get("interest_rate") or 0.0),
+        }
+        for r in results
+    ]

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -11,12 +11,17 @@ class CategoryExpenseItem(BaseModel):
     expense: int
 
 
-class AssetItem(BaseModel):
+class InvestmentAssetItem(BaseModel):
     asset_type: str
     account_name: str
     asset_id: UUID
     balance: int
 
+class RebalanceAssetItem(BaseModel):
+    asset_type: Literal["CHECKING", "PARKING", "CMA", "DEPOSIT"]
+    account_name: str
+    asset_id: UUID
+    balance: int
 
 # ── POST /portfolio/profile ───────────────────────────────────────────────────
 class ProfileRequest(BaseModel):
@@ -41,7 +46,7 @@ class RebalanceRequest(BaseModel):
     category_expense: list[CategoryExpenseItem]
     porti_type: str
     porti_comment: str
-    assets: list[AssetItem]
+    assets: list[RebalanceAssetItem]
     fixed_expense: int
     salary: int
 
@@ -77,7 +82,7 @@ class AssetPortfolioRequest(BaseModel):
     invest_interests: list[str]
     porti_type: str
     porti_comment: str
-    invest_assets: list[AssetItem]
+    invest_assets: list[InvestmentAssetItem]
 
 
 class GatheringAccount(BaseModel):
@@ -93,17 +98,16 @@ class PortfolioItem(BaseModel):
     ratio: int
     ticker: str
     interest_rate: float
-    comment: str
 
 
 class InvestmentPlan(BaseModel):
     title: str
     term: str
     summary: str
+    reasoning: str = ""
     gathering_id: Optional[UUID] = None
     gathering_account: Optional[GatheringAccount] = None
     amount: int
-    account_comment: str
     portfolio: list[PortfolioItem]
     expected_rr_pct: float
     investment_months: int
@@ -113,5 +117,4 @@ class InvestmentPlan(BaseModel):
 
 class AssetPortfolioResponse(BaseModel):
     created_at: datetime
-    reasoning: str = ""
     investment_flows: list[InvestmentPlan]

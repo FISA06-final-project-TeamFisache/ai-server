@@ -1,14 +1,12 @@
 import asyncio
+import json
 import logging
 import operator
-import os
 from datetime import datetime, timezone
 from typing import Annotated, Literal, TypedDict
 from uuid import UUID
 
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
-from langchain_core.tools import tool
 from langgraph.graph import END, StateGraph
 from langgraph.types import Send
 from pydantic import BaseModel
@@ -20,16 +18,23 @@ from app.schemas.portfolio import (
     InvestmentPlan,
     PortfolioItem,
 )
-from app.services.agent.llm import ainvoke_structured
-from app.services.agent.tools import normalize_ratios, compound_interest, calculate_hrp_weights
-from app.services.rag.db import get_pool
-from app.services.agent.porti_types import porti_label as _porti_label
+from app.services.agent.llm import ainvoke_structured, get_llm
+from app.services.agent.tools import (
+    normalize_ratios,
+    compound_interest,
+    calculate_hrp_weights,
+    search_etfs,
+)
+from app.services.agent.porti_types import (
+    porti_label as _porti_label,
+    STABLE_PORTI_TYPES,
+    NEUTRAL_PORTI_TYPES,
+    INVEST_PORTI_TYPES,
+)
 from app.services.agent.gather_products import GATHER_PRODUCTS
 
 logger = logging.getLogger(__name__)
 
-_EMBED_MODEL = "text-embedding-3-small"
-_embeddings = OpenAIEmbeddings(model=_EMBED_MODEL)
 _WOORI_BANK = "우리은행"
 _WOORI_INVEST = "우리투자증권"
 _CAN_INVEST_TYPES = {"ISA", "IRP", "PENSION_SAVINGS"}
@@ -39,16 +44,6 @@ _AccountType = Literal[
     "ISA", "IRP", "PENSION_SAVINGS",
 ]
 
-
-def _fmt_mktcap(v) -> str:
-    if not v:
-        return "-"
-    v = int(v)
-    if v >= 1_000_000_000_000:
-        return f"{v / 1_000_000_000_000:.1f}조"
-    if v >= 100_000_000:
-        return f"{v // 100_000_000}억"
-    return f"{v:,}"
 
 
 # ── AI 출력 스키마 ─────────────────────────────────────────────────────────────
@@ -61,31 +56,21 @@ class _FlowPlan(BaseModel):
     invest_strategy: str
     title: str
     summary: str
+    reasoning: str = ""
     ratio: int
 
 
 class _FlowPlansOutput(BaseModel):
-    reasoning: str
     flows: list[_FlowPlan]
 
 
 class _AIPortfolioItem(BaseModel):
     name: str
     ticker: str
-    comment: str
 
 
 class _PortfolioOutput(BaseModel):
     portfolio: list[_AIPortfolioItem]
-
-
-class _NarratedItem(BaseModel):
-    ticker: str
-    comment: str
-
-
-class _NarratorOutput(BaseModel):
-    items: list[_NarratedItem]
 
 
 # ── State ─────────────────────────────────────────────────────────────────────
@@ -99,7 +84,6 @@ class AssetPortfolioState(TypedDict):
     asset_list: list[dict]
     flow_plans: list[dict]
     investment_flows: Annotated[list, operator.add]
-    reasoning: str
 
 
 class _FlowSubgraphOutput(TypedDict):
@@ -109,8 +93,7 @@ class _FlowSubgraphOutput(TypedDict):
 class FlowExecuteState(TypedDict):
     plan: dict
     shared: dict
-    candidates: list[dict]   # Phase 1 (search_etfs) → Phase 2 (select_products)
-    portfolio: list[dict]    # Phase 2 (select_products) → execute_flow
+    portfolio: list[dict]
     investment_flows: Annotated[list, operator.add]
 
 
@@ -146,7 +129,8 @@ def _validate_and_merge(
         validated.append({
             "name": name,
             "ticker": p.get("ticker") or item.ticker or "",
-            "comment": item.comment,
+            "product_type": p.get("product_type", "ETF"),
+            "interest_rate": float(p.get("interest_rate") or 0.0),
         })
 
     n = len(validated)
@@ -158,29 +142,6 @@ def _validate_and_merge(
 
     return validated
 
-
-def _candidates_text(etf_candidates: list[dict]) -> str:
-    return "\n".join(
-        f"- [{p['product_type']}] {p['institution']} | {p['name']} "
-        f"| ticker:{p.get('ticker') or ''} | 연 {p['interest_rate'] or '-'}% "
-        f"| 거래대금:{_fmt_mktcap(p.get('avg_trading_value'))} "
-        f"| 연변동성:{str(round(float(p['volatility']), 1)) + '%' if p.get('volatility') else '-'} "
-        f"| 기초지수:{p.get('idx_ind_nm') or '-'} "
-        f"| {(p['description'] or '')[:80]}"
-        for p in etf_candidates
-    ) or "상품 없음"
-
-
-# ── Embedding ─────────────────────────────────────────────────────────────────
-
-async def _get_embedding(text: str) -> list[float] | None:
-    if not text.strip():
-        return None
-    try:
-        return await _embeddings.aembed_query(text)
-    except Exception as e:
-        logger.warning("임베딩 생성 실패: %s", e)
-        return None
 
 
 # ── Node: plan_flows ──────────────────────────────────────────────────────────
@@ -209,28 +170,37 @@ async def _plan_flows(state: AssetPortfolioState) -> dict:
     messages = [
         SystemMessage(content=(
             "당신은 개인 자산관리 전문가입니다.\n"
-            "사용자 투자 성향과 관심사를 반영해 3~5개의 투자 흐름을 설계하세요.\n\n"
+            "흐름을 설계하기 전에 다음 단계를 내부적으로 분석하세요 (JSON 출력에는 포함하지 않음).\n\n"
+            "[내부 분석 절차]\n"
+            "  1단계. 사용자 프로파일 파악\n"
+            "    · 투자 성향이 시사하는 위험 허용 수준은 무엇인가?\n"
+            "    · 관심사(interest, invest_interests)가 어떤 자산군·지역·테마를 가리키는가?\n"
+            "    · 월 투자금 규모로 흐름을 몇 개로 나누는 것이 현실적인가?\n\n"
+            "  2단계. 흐름 구조 결정\n"
+            "    · 단기·중기·장기 각 흐름이 필요한 이유는?\n"
+            "    · 각 흐름의 기간(investment_months)을 왜 그 범위로 설정하는가?\n\n"
+            "  3단계. 비중 배분 근거\n"
+            "    · 투자 성향을 고려할 때 단기:중기:장기 비율을 어떻게 배분하는가?\n"
+            "    · 각 흐름의 절대 금액이 해당 목표에 충분한가?\n\n"
+            "[흐름 설계 기준]\n"
             "계좌 종류:\n"
             "- 적립 전용 (투자 상품 불가): CHECKING, PARKING, CMA, SAVING, DEPOSIT\n"
             "- 투자 상품 가능: ISA, IRP, PENSION_SAVINGS\n\n"
-            "설계 기준:\n"
-            "- 단기 (investment_months 3~18): DEPOSIT 또는 CMA 권장\n"
+            "기간 기준:\n"
+            "- 단기 (investment_months 3~18): DEPOSIT 또는 PARKING 권장\n"
             "- 중기 (investment_months 24~84): 안정 성향 → SAVING, 투자 성향 → ISA\n"
-            "- 장기 (investment_months 120~360): IRP 또는 PENSION_SAVINGS 권장\n"
+            "- 장기 (investment_months 120~360): IRP 또는 PENSION_SAVINGS 권장\n\n"
+            "필드 기준:\n"
             "- ratio 합계 반드시 100\n"
-            "- invest_strategy: 투자 불가 계좌는 빈 문자열,\n"
-            "  투자 가능 계좌는 ETF 선택 시 중점 특성 (예: '채권 추종 ETF로 안정성 확보')\n"
-            "- 중요: 각 account_type은 흐름 전체에서 최대 1회만 사용. 같은 account_type 중복 배정 금지.\n"
-            "- title: 사용자의 관심사와 투자 성향을 반영한 구체적 목표명 (예: '미국 빅테크 중기 성장', '안정형 노후 준비')\n"
-            "- summary: 관심사(interest/invest_interests)와 PorTI 성향을 반드시 언급한 1~2문장.\n"
-            "  예) '해외 ETF 분산 관심에 맞춰 ISA 계좌로 중기 성장을 추구합니다.'\n"
-            "  예) '안전형 성향에 맞게 원금 보전 중심으로 적금을 활용한 단기 유동성을 확보합니다.'\n\n"
-            "reasoning 필드 작성 (flows 설계 전 반드시 먼저 작성):\n"
-            "  아래 질문에 답하며 이 사람의 투자 전략을 정리하세요:\n"
-            "  · PorTI 성향이 전체 흐름 설계에 어떻게 반영됐는가(PorTI 이름은 작성하지 마세요)?\n"
-            "  · 관심사(interest/invest_interests)가 계좌 선택이나 비중에 어떤 영향을 줬는가?\n"
-            "  · 단기/중기/장기 비중 배분의 근거는 무엇인가?\n"
-            "  → 이 분석을 reasoning 필드에 3~4문장으로 정리하세요.\n\n"
+            "- invest_strategy: 투자 불가 계좌는 빈 문자열, 투자 가능 계좌는 ETF 선택 전략 1문장\n"
+            "- 각 account_type은 흐름 전체에서 최대 1회 사용 (중복 금지)\n"
+            "- title: 관심사·성향을 반영한 구체적 목표명 (예: '미국 빅테크 중기 성장', '안정형 노후 준비')\n"
+            "- summary: 관심사·PorTI 성향 언급 포함 1~2문장\n\n"
+            "[흐름별 reasoning 필드]\n"
+            "위 내부 분석에서 내린 결론을 이 흐름에 적용해 2~3문장으로 작성하세요.\n"
+            "  · 2단계·3단계에서 내린 결론이 이 기간과 비중 선택과 어떻게 연결되는가?\n"
+            "  · 사용자의 관심사가 이 흐름 전략에 어떻게 반영됐는가?\n"
+            "  계좌명·상품명 언급 없이 순수 전략 관점으로 작성. PorTI 유형명(예: Tortoise, Fox) 언급 금지.\n\n"
             "반드시 JSON만 응답."
         )),
         HumanMessage(content=(
@@ -242,7 +212,6 @@ async def _plan_flows(state: AssetPortfolioState) -> dict:
         )),
     ]
     ai_result = await ainvoke_structured(messages, _FlowPlansOutput)
-    flow_reasoning = ai_result.reasoning if (ai_result and ai_result.reasoning) else ""
     raw_flows = ai_result.flows if (ai_result and ai_result.flows) else _FALLBACK_FLOWS
 
     seen_types: dict[str, int] = {}
@@ -298,6 +267,7 @@ async def _plan_flows(state: AssetPortfolioState) -> dict:
             "invest_strategy": f.invest_strategy,
             "title": f.title or f"{f.flow_type} 투자 플랜",
             "summary": f.summary,
+            "reasoning": f.reasoning,
             "ratio": ratio,
             "amount": round(invest_amount * ratio / 100),
             "can_invest": f.account_type in _CAN_INVEST_TYPES,
@@ -306,272 +276,103 @@ async def _plan_flows(state: AssetPortfolioState) -> dict:
             "gathering_account": gathering_account,
         })
 
-    return {"flow_plans": flow_plans, "reasoning": flow_reasoning}
+    return {"flow_plans": flow_plans}
 
 
-# ── ETF 검색 (흐름별 DB 직접 쿼리) ──────────────────────────────────────────────
+# ── ETF 검색 + 포트폴리오 구성 (agentic, 슬롯 기반) ──────────────────────────────
 
-async def _search_etfs_db(
-    user_embedding: list[float] | None,
-    max_volatility: float | None = None,
-    min_cagr: float | None = None,
-    name_contains: list[str] | None = None,
-    idx_ind_nm: list[str] | None = None,
-    limit: int = 15,
-) -> list[dict]:
-    """pgvector hybrid search: SQL 조건 필터 + 관심사 벡터 유사도 정렬."""
-    pool = await get_pool()
-    if not pool:
-        return []
+_VOLATILITY_CAP: dict[tuple[str, str], float | None] = {
+    ("STABLE", "단기"): 10.0,  ("STABLE", "중기"): 15.0,  ("STABLE", "장기"): 20.0,
+    ("NEUTRAL", "단기"): 15.0, ("NEUTRAL", "중기"): 25.0, ("NEUTRAL", "장기"): 30.0,
+    ("INVEST", "단기"): 25.0,  ("INVEST", "중기"): None,  ("INVEST", "장기"): None,
+}
 
-    conditions = ["deleted_at IS NULL"]
-    params: list = []
-    idx = 1
 
-    if max_volatility is not None:
-        conditions.append(f"volatility <= ${idx}")
-        params.append(float(max_volatility))
-        idx += 1
-
-    if min_cagr is not None:
-        conditions.append(f"interest_rate >= ${idx}")
-        params.append(float(min_cagr))
-        idx += 1
-
-    if name_contains:
-        kw_conds = []
-        for kw in name_contains:
-            kw_conds.append(f"name LIKE ${idx}")
-            params.append(f"%{kw}%")
-            idx += 1
-        conditions.append(f"({' OR '.join(kw_conds)})")
-
-    if idx_ind_nm:
-        kw_conds = []
-        for kw in idx_ind_nm:
-            kw_conds.append(f"idx_ind_nm LIKE ${idx}")
-            params.append(f"%{kw}%")
-            idx += 1
-        conditions.append(f"({' OR '.join(kw_conds)})")
-
-    where = " AND ".join(conditions)
-    select_cols = (
-        "product_type, institution, name, ticker, interest_rate, description, "
-        "avg_trading_value, acc_trdvol, idx_ind_nm, close_prc, nav, volatility"
-    )
-
-    if user_embedding:
-        vec_str = "[" + ",".join(f"{x:.8f}" for x in user_embedding) + "]"
-        query = (
-            f"SELECT {select_cols} FROM products WHERE {where} "
-            f"ORDER BY embedding <=> ${idx}::vector "
-            f"LIMIT ${idx + 1}"
-        )
-        params.extend([vec_str, limit])
+def _resolve_max_volatility(porti_type: str, term: str) -> float | None:
+    if porti_type in STABLE_PORTI_TYPES:
+        group = "STABLE"
+    elif porti_type in NEUTRAL_PORTI_TYPES:
+        group = "NEUTRAL"
     else:
-        query = (
-            f"SELECT {select_cols} FROM products WHERE {where} "
-            f"ORDER BY interest_rate DESC NULLS LAST "
-            f"LIMIT ${idx}"
-        )
-        params.append(limit)
-
-    try:
-        rows = await pool.fetch(query, *params)
-        return [dict(r) for r in rows]
-    except Exception as e:
-        logger.warning("ETF 검색 실패: %s", e)
-        return []
+        group = "INVEST"
+    return _VOLATILITY_CAP.get((group, term))
 
 
-# ── Node: search_etfs (Phase 1 — 임베딩 + tool-call loop) ────────────────────
+_SYSTEM_BUILD_PORTFOLIO = (
+    "포트폴리오 전문가입니다.\n\n"
+    "주어진 투자 흐름에 맞는 포트폴리오를 다음 순서로 설계하세요.\n\n"
+    "1단계 — 슬롯 설계 (최대 3개)\n"
+    "  이 흐름의 기간·성격에 따라 필요한 역할을 먼저 결정하세요.\n"
+    "  예) 단기 안정형 → 코어(단기채권) + 보조(단기자금)\n"
+    "      장기 성장형 → 코어(글로벌 주식) + 위성(테마) + 헤지(채권)\n\n"
+    "2단계 — 슬롯별 검색\n"
+    "  각 슬롯에 맞는 키워드로 search_etfs를 호출하세요.\n\n"
+    "3단계 — 선택·출력\n"
+    "  검색 결과에서 슬롯별 최적 ETF를 1개씩 선택해 JSON으로 출력하세요.\n\n"
+    "제약:\n"
+    "- IRP·PENSION_SAVINGS 계좌: 주식·채권·해외 자산군 반드시 분산\n"
+    "- name·ticker는 검색 결과의 정확한 값만 사용 (변형 금지)\n"
+    '- 최종 출력: {"portfolio":[{"name":"정확한상품명","ticker":"코드"}]}'
+)
 
-async def _node_search_etfs(flow_state: FlowExecuteState) -> FlowExecuteState:
-    """흐름별 관심사 임베딩 계산 후 LLM tool-calling으로 ETF 후보 탐색."""
+
+async def _node_build_portfolio(flow_state: FlowExecuteState) -> FlowExecuteState:
+    """슬롯 설계(최대 3개) → 슬롯별 ETF 검색(tool) → 최종 포트폴리오 선택."""
     plan = flow_state["plan"]
     shared = flow_state["shared"]
 
     if not plan["can_invest"]:
-        return {**flow_state, "candidates": []}
+        return {**flow_state, "portfolio": []}
 
-    query_parts = list(shared["invest_interests"]) + ([shared["interest"]] if shared["interest"] else [])
-    user_embedding = await _get_embedding(" ".join(query_parts))
+    max_volatility = _resolve_max_volatility(shared["porti_type"], plan["term"])
+    base_query_parts = list(shared["invest_interests"])
+    all_candidates: dict[str, dict] = {}
 
-    @tool
-    async def search_etfs(
-        max_volatility: float | None = None,
-        min_cagr: float | None = None,
-        name_contains: list[str] | None = None,
-        idx_ind_nm: list[str] | None = None,
-        limit: int = 15,
-    ) -> list[dict]:
-        """DB에서 조건에 맞는 ETF를 검색합니다.
-        max_volatility: 최대 연변동성(%). 예) 20.0
-        min_cagr: 최소 연평균수익률(%). 예) 5.0
-        name_contains: ETF명에 포함돼야 할 키워드 목록. 예) ["채권", "배당"]
-        idx_ind_nm: 기초지수명에 포함돼야 할 키워드 목록. 예) ["S&P", "미국채", "코스피"]
-        limit: 최대 반환 개수 (기본 15)
-        """
-        return await _search_etfs_db(
-            user_embedding,
-            max_volatility=max_volatility,
-            min_cagr=min_cagr,
-            name_contains=name_contains,
-            idx_ind_nm=idx_ind_nm,
-            limit=limit,
-        )
+    llm = get_llm().bind_tools([search_etfs])
 
-    llm = ChatOpenAI(
-        model=os.getenv("LLM_MODEL", "gpt-4o-mini-2024-07-18"),
-        temperature=float(os.getenv("LLM_TEMPERATURE", "0.2")),
-    ).bind_tools([search_etfs])
-
-    _user_ctx = (
+    user_ctx = (
         f"계좌 유형: {plan['account_type']}\n"
         f"흐름: {plan['flow_type']} ({plan['term']}, {plan['investment_months']}개월)\n"
         f"투자 전략: {plan['invest_strategy'] or '흐름 성격에 맞게 분산 구성'}\n"
         f"PorTI: {_porti_label(shared['porti_type'])} / {shared['porti_comment']}\n"
-        f"관심사: {shared['interest']}\n"
-        f"투자 관심 분야: {', '.join(shared['invest_interests']) or '없음'}"
+        f"사용자 관심사: {', '.join(shared['invest_interests']) or '없음'}"
     )
+    messages: list = [SystemMessage(content=_SYSTEM_BUILD_PORTFOLIO), HumanMessage(content=user_ctx)]
 
-    tool_messages = [
-        SystemMessage(content=(
-            "포트폴리오 전문가입니다.\n"
-            "search_etfs 도구를 사용해 이 흐름에 적합한 ETF를 검색하세요.\n"
-            "IRP·PENSION_SAVINGS 계좌인 경우 주식·채권·해외 자산군을 반드시 분산하세요.\n"
-            "특히 IRP 계좌는 안정 상품 비율이 최소 30% 이상이 되도록 추천합니다.\n"
-            "결과가 충분하면 도구를 더 이상 호출하지 마세요."
-        )),
-        HumanMessage(content=_user_ctx),
-    ]
-
-    latest_candidates = await _search_etfs_db(user_embedding, limit=15)
-
-    for _ in range(3):
-        response = await llm.ainvoke(tool_messages)
-        tool_messages.append(response)
+    for _ in range(6):
+        response = await llm.ainvoke(messages)
+        messages.append(response)
         if not response.tool_calls:
             break
         for tc in response.tool_calls:
-            new_candidates = await search_etfs.ainvoke(tc["args"])
-            if new_candidates:
-                latest_candidates = new_candidates
-            tool_result = _candidates_text(latest_candidates) if latest_candidates else "조건을 충족하는 ETF 없음"
-            tool_messages.append(ToolMessage(content=tool_result, tool_call_id=tc["id"]))
+            # max_volatility는 PorTI 규칙 값으로 주입 — LLM이 설정한 값 무시
+            args = {**tc["args"], "max_volatility": max_volatility}
+            tool_result = await search_etfs.ainvoke(args)
+            for item in (tool_result or []):
+                all_candidates[item["name"]] = item
+            messages.append(ToolMessage(
+                content=json.dumps(tool_result, ensure_ascii=False),
+                tool_call_id=tc["id"],
+            ))
 
-    return {**flow_state, "candidates": latest_candidates}
-
-
-# ── Node: select_products (Phase 2 — structured selection) ───────────────────
-
-async def _node_select_products(flow_state: FlowExecuteState) -> FlowExecuteState:
-    """후보 ETF 목록에서 이 흐름에 맞는 최종 포트폴리오를 structured output으로 선택."""
-    plan = flow_state["plan"]
-    shared = flow_state["shared"]
-    latest_candidates = flow_state["candidates"]
-
-    if not plan["can_invest"] or not latest_candidates:
-        return {**flow_state, "portfolio": []}
-
-    confirmed_by_name = {p["name"]: p for p in latest_candidates}
-    filtered_text = _candidates_text(latest_candidates)
-
-    _user_ctx = (
-        f"계좌 유형: {plan['account_type']}\n"
-        f"흐름: {plan['flow_type']} ({plan['term']}, {plan['investment_months']}개월)\n"
-        f"투자 전략: {plan['invest_strategy'] or '흐름 성격에 맞게 분산 구성'}\n"
-        f"PorTI: {_porti_label(shared['porti_type'])} / {shared['porti_comment']}\n"
-        f"관심사: {shared['interest']}\n"
-        f"투자 관심 분야: {', '.join(shared['invest_interests']) or '없음'}"
+    result = await ainvoke_structured(
+        messages + [HumanMessage(content="검색 결과를 바탕으로 최종 포트폴리오를 JSON으로 출력하세요.")],
+        _PortfolioOutput,
     )
-
-    selection_messages = [
-        SystemMessage(content=(
-            "포트폴리오 전문가입니다.\n"
-            "[선택 가능 상품 목록]에서 이 흐름에 적합한 ETF를 선택하세요.\n\n"
-            "규칙:\n"
-            "- name: 목록의 정확한 상품명 그대로 (변형·새 이름 생성 절대 금지)\n"
-            "- ticker: 목록의 ticker 그대로\n"
-            "- IRP·PENSION_SAVINGS 계좌인 경우 주식·채권·해외 자산군을 반드시 분산하세요.\n"
-            "- comment: 목록의 실제 수치(연변동성·연수익률)를 반드시 인용해 이 흐름 전략과 맞는 이유 1문장.\n"
-            "  예) '연변동성 8.2%로 안정적이며 채권 분산으로 중기 흐름에 적합합니다.'\n"
-            "  예) '연수익률 12.4%로 성장성 높고 S&P500 추종으로 장기 분산 효과 기대.'\n"
-            "  수익 보장 표현 금지.\n"
-            'JSON만 응답: {"portfolio":[{"name":"정확한상품명","ticker":"코드","comment":"이유"}]}'
-        )),
-        HumanMessage(content=_user_ctx + f"\n\n[선택 가능 상품 목록]\n{filtered_text}"),
-    ]
-
-    result = await ainvoke_structured(selection_messages, _PortfolioOutput)
     raw_items = result.portfolio if result else []
-    portfolio = _validate_and_merge(raw_items, confirmed_by_name)
+    portfolio = _validate_and_merge(raw_items, all_candidates)
 
-    if not portfolio and latest_candidates:
-        top = latest_candidates[:2]
-        auto_items = [
-            _AIPortfolioItem(name=p["name"], ticker=p.get("ticker", ""), comment="관심사 기반 추천")
-            for p in top
-        ]
-        portfolio = _validate_and_merge(auto_items, {p["name"]: p for p in top})
-        logger.info("포트폴리오 선택 실패 → 상위 %d개 자동 배정: %s", len(portfolio), [i["name"] for i in portfolio])
+    if not portfolio:
+        logger.info("[%s] 포트폴리오 구성 실패 → 기본 유사도 검색 폴백", plan["flow_type"])
+        fallback_rows = await search_etfs.ainvoke({"keywords": base_query_parts, "max_volatility": None})
+        if fallback_rows:
+            fallback_items = [_AIPortfolioItem(name=r["name"], ticker=r.get("ticker", "")) for r in fallback_rows[:3]]
+            portfolio = _validate_and_merge(fallback_items, {r["name"]: r for r in fallback_rows[:3]})
 
     return {**flow_state, "portfolio": portfolio}
 
 
-# ── Helpers: HRP narrate + expected return ────────────────────────────────────
-
-async def _narrate_hrp_result(
-    portfolio: list[dict],
-    hrp_metrics: dict,
-    plan: dict,
-) -> list[dict]:
-    """HRPOpt 수치(변동성·상관계수·비중 변화)를 LLM이 자연어로 번역."""
-    per_ticker = hrp_metrics["per_ticker"]
-    data_days = hrp_metrics["data_days"]
-
-    rows = []
-    for item in portfolio:
-        t = item.get("ticker", "")
-        m = per_ticker.get(t, {})
-        rows.append(
-            f"{t} | {item['name']} | {item['comment']} | "
-            f"연변동성 {m.get('vol_pct', '-')}% | "
-            f"평균상관 {m.get('avg_corr', '-')} | "
-            f"균등{m.get('equal_ratio', '-')}%→HRP{m.get('hrp_ratio', '-')}%"
-        )
-
-    messages = [
-        SystemMessage(content=(
-            "투자 포트폴리오 데이터 해설 전문가입니다.\n"
-            "HRP(Hierarchical Risk Parity) 알고리즘이 산출한 수치를 바탕으로\n"
-            "각 ETF의 비중 배정 근거를 1~2문장으로 설명하세요.\n\n"
-            "규칙:\n"
-            "- 아래 수치 데이터만 근거로 사용할 것\n"
-            "- 비중 변경 제안·수익 보장 표현 금지\n"
-            "- ticker 기준으로 응답\n"
-            'JSON만 응답: {"items":[{"ticker":"코드","comment":"설명"}]}'
-        )),
-        HumanMessage(content=(
-            f"흐름: {plan['flow_type']} ({plan['term']}, {plan['investment_months']}개월)\n"
-            f"HRP 계산 기간: {data_days}거래일\n\n"
-            "ticker | ETF명 | 선택이유 | 연변동성 | 평균상관계수 | 균등→HRP비중\n"
-            + "\n".join(rows)
-        )),
-    ]
-
-    result = await ainvoke_structured(messages, _NarratorOutput)
-    if not result or not result.items:
-        logger.info("Narrator: 결과 없음, 기존 comment 유지")
-        return portfolio
-
-    comment_by_ticker = {ni.ticker: ni.comment for ni in result.items}
-    logger.info("Narrator: [%s] comment 업데이트 | 티커: %s", plan["flow_type"], list(comment_by_ticker.keys()))
-    return [
-        {**item, "comment": comment_by_ticker.get(item.get("ticker", ""), item["comment"])}
-        for item in portfolio
-    ]
-
+# ── Helpers: expected return ──────────────────────────────────────────────────
 
 def _calc_expected_return(
     portfolio: list[dict],
@@ -608,19 +409,6 @@ async def execute_flow(flow_state: FlowExecuteState) -> dict:
     """HRP 비중 최적화 → 서사화 → 기대 수익 계산 → 최종 흐름 결과 반환."""
     plan = flow_state["plan"]
     portfolio = list(flow_state.get("portfolio", []))
-    candidates = flow_state.get("candidates", [])
-
-    _ga_name = plan["gathering_account"]["name"]
-    _account_action = (
-        f"보유 중인 {_ga_name} 계좌를 활용합니다."
-        if plan["has_user_account"]
-        else f"{_ga_name} ({plan['account_type']}) 계좌 신규 개설이 필요합니다."
-    )
-    account_comment = (
-        f"{plan['summary']} {_account_action}"
-        if plan.get("summary")
-        else _account_action
-    )
 
     if len(portfolio) >= 2:
         tickers = [item["ticker"] for item in portfolio if item.get("ticker")]
@@ -636,22 +424,8 @@ async def execute_flow(flow_state: FlowExecuteState) -> dict:
                     {**item, "ratio": weight_map.get(item.get("ticker", ""), item["ratio"])}
                     for item in portfolio
                 ])
-                hrp_ratio_map = {item.get("ticker", ""): item["ratio"] for item in portfolio}
 
-                hrp_metrics = {
-                    "data_days": hrp_result["data_days"],
-                    "per_ticker": {
-                        t: {
-                            **hrp_result["metrics"].get(t, {}),
-                            "equal_ratio": equal_ratio_map.get(t, 0),
-                            "hrp_ratio": hrp_ratio_map.get(t, 0),
-                        }
-                        for t in tickers
-                    },
-                }
-                portfolio = await _narrate_hrp_result(portfolio, hrp_metrics, plan)
-
-    product_by_name: dict[str, dict] = {p["name"]: p for p in candidates}
+    product_by_name: dict[str, dict] = {item["name"]: item for item in portfolio}
     expected_rr, expected_amount = _calc_expected_return(portfolio, plan, product_by_name)
 
     ga = plan["gathering_account"]
@@ -664,10 +438,10 @@ async def execute_flow(flow_state: FlowExecuteState) -> dict:
             "title": plan["title"],
             "term": plan["term"],
             "summary": plan["summary"],
+            "reasoning": plan.get("reasoning", ""),
             "gathering_id": plan["gathering_asset_id"],
             "gathering_account": ga,
             "amount": amount,
-            "account_comment": account_comment,
             "portfolio": [
                 {
                     "type": product_by_name.get(item["name"], {}).get("product_type", "ETF"),
@@ -675,7 +449,6 @@ async def execute_flow(flow_state: FlowExecuteState) -> dict:
                     "ticker": item["ticker"],
                     "ratio": item["ratio"],
                     "interest_rate": float(product_by_name.get(item["name"], {}).get("interest_rate") or 0.0),
-                    "comment": item["comment"],
                 }
                 for item in portfolio
             ],
@@ -696,12 +469,10 @@ async def execute_flow(flow_state: FlowExecuteState) -> dict:
 
 def _build_flow_subgraph() -> StateGraph:
     graph = StateGraph(FlowExecuteState, output=_FlowSubgraphOutput)
-    graph.add_node("search_etfs", _node_search_etfs)
-    graph.add_node("select_products", _node_select_products)
+    graph.add_node("build_portfolio", _node_build_portfolio)
     graph.add_node("execute_flow", execute_flow)
-    graph.set_entry_point("search_etfs")
-    graph.add_edge("search_etfs", "select_products")
-    graph.add_edge("select_products", "execute_flow")
+    graph.set_entry_point("build_portfolio")
+    graph.add_edge("build_portfolio", "execute_flow")
     graph.add_edge("execute_flow", END)
     return graph.compile()
 
@@ -767,19 +538,18 @@ async def recommend_asset_portfolio(request: AssetPortfolioRequest) -> AssetPort
         "asset_list": asset_list,
         "flow_plans": [],
         "investment_flows": [],
-        "reasoning": "",
     }
 
     final_state: AssetPortfolioState = await _graph.ainvoke(initial_state)
 
     return AssetPortfolioResponse(
         created_at=datetime.now(timezone.utc),
-        reasoning=final_state.get("reasoning", ""),
         investment_flows=[
             InvestmentPlan(
                 title=f["title"],
                 term=f["term"],
                 summary=f["summary"],
+                reasoning=f.get("reasoning", ""),
                 gathering_id=UUID(f["gathering_id"]) if f.get("gathering_id") else None,
                 gathering_account=(
                     None if f.get("gathering_id") else GatheringAccount(
@@ -790,7 +560,6 @@ async def recommend_asset_portfolio(request: AssetPortfolioRequest) -> AssetPort
                     )
                 ),
                 amount=f["amount"],
-                account_comment=f["account_comment"],
                 portfolio=[
                     PortfolioItem(
                         type=p["type"],
@@ -798,7 +567,6 @@ async def recommend_asset_portfolio(request: AssetPortfolioRequest) -> AssetPort
                         ticker=p["ticker"],
                         ratio=p["ratio"],
                         interest_rate=p["interest_rate"],
-                        comment=p["comment"],
                     )
                     for p in f["portfolio"]
                 ],
