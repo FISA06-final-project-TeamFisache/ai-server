@@ -132,13 +132,6 @@ def _validate_and_merge(
             "interest_rate": float(p.get("interest_rate") or 0.0),
         })
 
-    n = len(validated)
-    if n > 0:
-        base = 100 // n
-        rem = 100 - base * n
-        for i, item in enumerate(validated):
-            item["ratio"] = base + (1 if i < rem else 0)
-
     return validated
 
 
@@ -357,7 +350,7 @@ async def _node_build_portfolio(flow_state: FlowExecuteState) -> FlowExecuteStat
 
 # ── Helpers: expected return ──────────────────────────────────────────────────
 
-def _calc_expected_return(
+async def _calc_expected_return(
     portfolio: list[dict],
     plan: dict,
     product_by_name: dict[str, dict],
@@ -378,7 +371,7 @@ def _calc_expected_return(
     elif expected_rr == 0.0:
         logger.warning("[%s] gathering_account interest_rate=0.0 — DB 데이터 확인 필요", plan.get("flow_type", ""))
 
-    result = compound_interest.invoke({
+    result = await compound_interest.ainvoke({
         "monthly_amount": plan["amount"],
         "annual_rate_pct": expected_rr,
         "months": plan["investment_months"],
@@ -393,12 +386,16 @@ async def execute_flow(flow_state: FlowExecuteState) -> dict:
     plan = flow_state["plan"]
     portfolio = list(flow_state.get("portfolio", []))
 
+    n = len(portfolio)
+    if n > 0:
+        base = 100 // n
+        rem = 100 - base * n
+        portfolio = [{**item, "ratio": base + (1 if i < rem else 0)} for i, item in enumerate(portfolio)]
+
     if len(portfolio) >= 2:
         tickers = [item["ticker"] for item in portfolio if item.get("ticker")]
         if tickers:
             logger.info("HRP: [%s] 비중 계산 시작 | 티커: %s", plan["flow_type"], tickers)
-            equal_ratio_map = {item.get("ticker", ""): item["ratio"] for item in portfolio}
-
             hrp_result = await calculate_hrp_weights.ainvoke({"tickers": tickers})
 
             if hrp_result["method"] == "hrp":
@@ -409,7 +406,7 @@ async def execute_flow(flow_state: FlowExecuteState) -> dict:
                 ])
 
     product_by_name: dict[str, dict] = {item["name"]: item for item in portfolio}
-    expected_rr, expected_amount = _calc_expected_return(portfolio, plan, product_by_name)
+    expected_rr, expected_amount = await _calc_expected_return(portfolio, plan, product_by_name)
 
     ga = plan["gathering_account"]
     months = plan["investment_months"]
@@ -474,7 +471,6 @@ def _route_flows(state: AssetPortfolioState) -> list[Send]:
         Send("flow_branch", {
             "plan": plan,
             "shared": shared,
-            "candidates": [],
             "portfolio": [],
             "investment_flows": [],
         })
