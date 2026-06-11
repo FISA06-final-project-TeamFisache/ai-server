@@ -290,10 +290,10 @@ async def _get_embedding(text: str) -> list[float] | None:
 
 async def _search_etfs_db(
     query_parts: list[str],
-    max_volatility: float | None = None,
+    min_trading_value: int = 100_000_000,
     limit: int = 15,
 ) -> list[dict]:
-    """pgvector hybrid search: 변동성 필터 + 관심사 벡터 유사도 정렬."""
+    """pgvector hybrid search: 거래대금 필터 + 관심사 벡터 유사도 정렬."""
     pool = await get_pool()
     if not pool:
         return []
@@ -304,9 +304,9 @@ async def _search_etfs_db(
     params: list = []
     idx = 1
 
-    if max_volatility is not None:
-        conditions.append(f"volatility <= ${idx}")
-        params.append(float(max_volatility))
+    if min_trading_value > 0:
+        conditions.append(f"avg_trading_value >= ${idx}")
+        params.append(min_trading_value)
         idx += 1
 
     where = " AND ".join(conditions)
@@ -342,17 +342,16 @@ async def _search_etfs_db(
 @tool
 async def search_etfs(
     keywords: list[str],
-    max_volatility: float | None = None,
 ) -> list[dict]:
     """포트폴리오 슬롯에 맞는 ETF를 검색합니다.
     keywords: 자산군·테마 키워드 목록. 예) ["글로벌 주식", "채권", "S&P500"]
-    max_volatility: 연변동성 상한(%). 시스템 관리값 — 직접 설정하지 마세요.
     """
-    results = await _search_etfs_db(keywords, max_volatility=max_volatility, limit=10)
+    results = await _search_etfs_db(keywords, limit=10)
     return [
         {
             "name": r["name"],
             "ticker": r.get("ticker", ""),
+            "idx_ind_nm": r.get("idx_ind_nm") or "",
             "volatility": round(float(r["volatility"]), 1) if r.get("volatility") else None,
             "description": (r.get("description") or "")[:80],
             "product_type": r.get("product_type", "ETF"),

@@ -153,7 +153,10 @@ async def upsert_products_to_pg(products: list[dict]) -> None:
         total = len(products)
         for i, p in enumerate(products, 1):
             print(f"[{i}/{total}] 임베딩: {p['name'][:40]}")
-            vec_str = "[" + ",".join(str(v) for v in _embed(p["name"])) + "]"
+            embed_text = p["name"]
+            if p.get("idx_ind_nm"):
+                embed_text += f" {p['idx_ind_nm']}"
+            vec_str = "[" + ",".join(str(v) for v in _embed(embed_text)) + "]"
             await conn.execute(
                 _UPSERT_PRODUCT,
                 str(uuid.uuid4()),
