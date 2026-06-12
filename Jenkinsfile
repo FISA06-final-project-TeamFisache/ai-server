@@ -33,10 +33,21 @@ pipeline {
                             --query "Status" \
                             --output text)
                         echo "[$i] Status: $STATUS"
-                        if [ "$STATUS" = "Success" ]; then exit 0; fi
-                        if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then exit 1; fi
+                        if [ "$STATUS" = "Success" ]; then
+                            echo "===== remote stdout (SSM truncates to ~2500 chars) ====="
+                            aws ssm get-command-invocation --region ${AWS_REGION} --command-id $COMMAND_ID --instance-id ${INSTANCE_ID} --query "StandardOutputContent" --output text
+                            exit 0
+                        fi
+                        if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
+                            echo "===== DEPLOY FAILED ($STATUS) — remote stdout ====="
+                            aws ssm get-command-invocation --region ${AWS_REGION} --command-id $COMMAND_ID --instance-id ${INSTANCE_ID} --query "StandardOutputContent" --output text
+                            echo "===== remote stderr ====="
+                            aws ssm get-command-invocation --region ${AWS_REGION} --command-id $COMMAND_ID --instance-id ${INSTANCE_ID} --query "StandardErrorContent" --output text
+                            exit 1
+                        fi
                     done
-                    echo "Timeout"
+                    echo "===== TIMEOUT — last remote stdout ====="
+                    aws ssm get-command-invocation --region ${AWS_REGION} --command-id $COMMAND_ID --instance-id ${INSTANCE_ID} --query "StandardOutputContent" --output text
                     exit 1
                 '''
             }
