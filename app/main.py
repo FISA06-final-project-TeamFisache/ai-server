@@ -33,7 +33,10 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     kafka_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
-    await start_producer(kafka_servers)
+    try:
+        await start_producer(kafka_servers)
+    except Exception as e:
+        logger.warning("Kafka 연결 실패 — 로그 전송 비활성화: %s", e)
     yield
     await stop_producer()
 
