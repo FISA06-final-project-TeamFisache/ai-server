@@ -39,6 +39,27 @@ _AccountType = Literal[
 
 _CAN_INVEST_TYPES: frozenset[str] = frozenset({"ISA", "IRP", "PENSION_SAVINGS"})
 
+# 노후 버킷 — 구조적 가드용
+_RETIRE_TYPES: frozenset[str] = frozenset({"IRP", "PENSION_SAVINGS"})
+
+# 노후 흐름 누락 시 주입할 소액 비중(%). FP 원칙: 노후는 작게라도 항상.
+# (흐름은 0%로 넣을 수 없어 필요한 단일 상수 — 성향별 표가 아님)
+_RETIRE_FLOOR = 10
+
+# 노후 버킷 누락 시 주입할 기본 흐름 (PENSION_SAVINGS, GATHER_PRODUCTS 기반)
+_RETIRE_INJECT_TEMPLATE: dict = {
+    "flow_type": "노후", "term": "장기", "investment_months": 240,
+    "account_type": "PENSION_SAVINGS",
+    "invest_strategy": "장기 분산 ETF로 노후 대비",
+    "title": "노후 대비 연금",
+    "summary": "당장의 목표와 함께, 노후 준비도 소액으로 미리 시작해두는 구성이에요.",
+    "reasoning": "지금의 목표가 가장 급하시겠지만, 노후 자금은 일찍 시작할수록 복리와 세액공제 효과가 크게 붙어요. 그래서 부담되지 않는 작은 금액만 연금저축에 미리 담아두시길 권해드려요. 시간이 가장 큰 무기랍니다.",
+    "ratio": 0, "gathering_asset_id": None, "has_user_account": False,
+    "gathering_account_name": "우리투자증권 연금저축계좌",
+    "gathering_account_institution": "우리투자증권",
+    "gathering_account_interest_rate": 0.0,
+}
+
 # LLM 실패 시 기본 흐름 — gathering_account 정보 포함
 _FALLBACK_FLOWS: list[dict] = [
     {
@@ -166,19 +187,32 @@ class FlowState(TypedDict):
 # ── Planner ───────────────────────────────────────────────────────────────────
 
 _SYSTEM_PLANNER = (
-    "당신은 개인 자산관리 전문가입니다.\n\n"
+    "당신은 개인 자산관리 전문가(FP)입니다.\n\n"
     "[역할]\n"
-    "사용자의 투자 성향·관심사·보유 계좌를 종합해 투자 흐름을 설계하고,\n"
+    "사용자의 투자 성향·인생 목표·보유 계좌를 종합해 투자 흐름을 설계하고,\n"
     "각 흐름에 맞는 모으기 계좌를 선택하세요.\n\n"
+    "[입력 데이터 해석]\n"
+    "- interest = 사용자의 '인생 목표'입니다 (예: 내집마련, 결혼, 노후, 자동차). 흐름 설계의 핵심 기준입니다.\n"
+    "- invest_interests = 투자 관심 자산군·테마입니다 (예: 미국주식, 반도체). ETF 전략 참고용일 뿐, 흐름 구조와 무관합니다.\n\n"
     "[내부 분석 절차 — JSON에 포함하지 않음]\n"
     "  1단계: 투자 성향이 시사하는 위험 허용 수준 파악\n"
-    "  2단계: 관심사(interest, invest_interests)가 가리키는 자산군·테마 파악\n"
+    "  2단계: interest(인생 목표)가 요구하는 자금 규모·달성 기간 파악\n"
     "  3단계: 월 투자금 규모로 흐름 수·비중 배분 결정\n\n"
+    "[목표 기반 설계 규칙 — FP 필수]\n"
+    "1. 목표와 성향이 충돌해도 목표를 포기하지 마세요. 성향이 '단기'여도 목표가 목돈·장기 자금을 요구하면\n"
+    "   중기(ISA)·장기(IRP/PENSION_SAVINGS) 흐름을 추가하세요.\n"
+    "2. 목표별 계좌 매칭:\n"
+    "   - 내집마련·전세·목돈 마련 → ISA + 예적금 중심 (ISA는 비과세·유연해 3~7년 자금에 적합)\n"
+    "     ※ IRP·연금저축은 만 55세까지 인출이 묶이므로 주택 자금에는 큰 비중 배분 금지\n"
+    "   - 노후·은퇴 → IRP·PENSION_SAVINGS (연말정산 세액공제). 목표가 달라도 노후 대비 소액 흐름은 항상 1개 포함\n"
+    "   - 결혼·자동차 등 단기 목돈 → DEPOSIT/SAVING 중심, 여력 있으면 ISA 일부\n"
+    "3. 비중은 성향을 존중하되, 활성 목표(interest) 흐름에 가장 큰 비중을 두세요.\n"
+    "4. 목표가 비어 있거나('없음') 불명확하면 성향에 따른 기본 배분을 따르세요.\n\n"
     "[흐름 설계 기준]\n"
     "기간 분류:\n"
     "- 단기 (investment_months 3~18): DEPOSIT 또는 PARKING 권장\n"
-    "- 중기 (investment_months 24~84): 안정 성향 → SAVING, 투자 성향 → ISA\n"
-    "- 장기 (investment_months 120~360): IRP 또는 PENSION_SAVINGS 권장\n\n"
+    "- 중기 (investment_months 24~84): 안정 성향 → SAVING, 투자 성향·목돈 마련(집 등) → ISA\n"
+    "- 장기 (investment_months 120~360): 노후·은퇴 목적 → IRP 또는 PENSION_SAVINGS\n\n"
     "계좌 종류:\n"
     "- 적립 전용 (투자 상품 불가): CHECKING, PARKING, CMA, SAVING, DEPOSIT\n"
     "- 투자 상품 가능: ISA, IRP, PENSION_SAVINGS\n\n"
@@ -196,9 +230,17 @@ _SYSTEM_PLANNER = (
     "- ratio 합계 반드시 100\n"
     "- 각 account_type은 흐름 전체에서 최대 1회 사용\n"
     "- invest_strategy: 적립 전용 계좌는 빈 문자열, 투자 가능 계좌는 ETF 전략 1문장\n"
-    "- title: 관심사·성향 반영한 구체적 목표명 (예: '미국 빅테크 중기 성장')\n"
-    "- summary: 관심사·PorTI 성향 언급 포함 1~2문장\n"
-    "- reasoning: 이 흐름의 기간·비중 선택 근거 2~3문장\n\n"
+    "- title: 인생 목표·성향 반영한 구체적 목표명 (예: '내집마련 ISA 비과세 시드', '노후 대비 연금')\n"
+    "- summary: 카드에 기본으로 보이는 1~2문장. 한눈에 '내 상황에 맞춰 분석됐다'고 느껴지게 개인화하세요.\n"
+    "  · 사용자의 실제 인생 목표와 PorTI 성향을 구체적으로 직접 언급 (일반론·템플릿식 표현 금지)\n"
+    "  · 이 계좌·기간을 고른 핵심 이유 한 가지를 자연스럽게 포함\n"
+    "  · 친근한 상담 말투(~요/~네요)로, AI가 내 상황을 읽고 골라준 듯한 인상\n"
+    "- reasoning: 사용자에게 직접 이야기하듯 3~4문장의 개인화된 FP 상담. 아래를 구체적으로 녹이세요:\n"
+    "  · 이 인생 목표에 왜 이 계좌·기간(개월 수 언급)·비중이 적합한지\n"
+    "  · 선택한 계좌의 실질 혜택(ISA 비과세, 연금 세액공제, 예적금 안정성 등)을 일상어로 풀어서\n"
+    "  · PorTI 성향과 어떻게 어울리는지 — 목표와 성향이 충돌하면 그 해소 논리를 부드럽게 설명\n"
+    "  · 따뜻하고 신뢰감 있는 말투(~요/~네요/~랍니다)로, 사용자를 안심시키는 한마디로 마무리\n"
+    "  딱딱한 한자어·사전식 정의 나열 금지. 사용자의 상황에 맞춰 구체적으로.\n\n"
     "반드시 JSON만 응답."
 )
 
@@ -222,13 +264,68 @@ def _planner_messages(state: AssetPortfolioState) -> list:
         HumanMessage(content=(
             f"PorTI 유형: {_porti_label(state['porti_type'])}\n"
             f"투자 성향 설명: {state['porti_comment']}\n"
-            f"관심사: {state['interest']}\n"
-            f"투자 관심 분야: {', '.join(state['invest_interests']) or '없음'}\n"
+            f"인생 목표(interest): {state['interest'] or '없음'}\n"
+            f"투자 관심 자산군(invest_interests): {', '.join(state['invest_interests']) or '없음'}\n"
             f"월 투자금: {state['invest_amount']:,}원\n\n"
             f"유저 보유 계좌:\n{assets_text}\n\n"
             f"추천 가능 상품:\n{products_text}"
         )),
     ]
+
+
+def _build_retire_flow(state: AssetPortfolioState) -> dict:
+    """노후 흐름 주입용. 사용자 목표(interest)를 끼워넣어 정적 문구가 일반 템플릿처럼 보이지 않게 한다.
+    계좌 id는 이후 재탐색 단계에서 확정하므로 여기선 보유한 노후 계좌 종류만 맞춘다.
+    """
+    flow = dict(_RETIRE_INJECT_TEMPLATE)
+
+    goal = (state.get("interest") or "").strip()
+    if goal:
+        flow["summary"] = f"'{goal}' 목표에 집중하면서도, 노후는 작게라도 지금부터 함께 챙겨두는 구성이에요."
+        flow["reasoning"] = (
+            f"지금은 '{goal}'이 가장 급하시겠지만, 노후 자금은 일찍 시작할수록 복리와 세액공제 효과가 크게 붙어요. "
+            f"그래서 '{goal}' 자금에 집중하시되, 부담되지 않는 작은 금액만 연금저축에 함께 담아두시길 권해드려요. "
+            "시간이 가장 큰 무기랍니다."
+        )
+
+    # 유저가 보유한 노후 계좌 종류(IRP/연금)에 맞춤 — 실제 id는 재탐색 단계가 확정
+    for a in state["asset_list"]:
+        if a["asset_type"] in _RETIRE_TYPES:
+            flow["account_type"] = a["asset_type"]
+            break
+
+    return flow
+
+
+def _apply_structural_guard(flows: list[dict], state: AssetPortfolioState) -> list[dict]:
+    """얇은 구조적 가드 — 비중은 LLM에 맡기고 '노후 흐름 존재'만 결정론적으로 보장.
+
+    LLM이 노후(IRP/PENSION_SAVINGS) 흐름을 누락하면 소액(_RETIRE_FLOOR%) 흐름을
+    주입하고 그만큼 기존 흐름 비중을 비례 축소해 합계 100을 유지한다.
+    이미 노후 흐름이 있거나 흐름이 비어 있으면 LLM 출력을 그대로 둔다.
+    """
+    if not flows:
+        return flows
+    if any(f["account_type"] in _RETIRE_TYPES for f in flows):
+        return flows
+
+    flows = [dict(f) for f in flows]
+    injected = _build_retire_flow(state)
+
+    remaining = 100 - _RETIRE_FLOOR
+    total = sum(f["ratio"] for f in flows) or 1
+    for f in flows:
+        f["ratio"] = round(f["ratio"] / total * remaining)
+    injected["ratio"] = _RETIRE_FLOOR
+    flows.append(injected)
+
+    # 반올림 오차는 첫 흐름이 흡수해 합계 100 유지
+    diff = 100 - sum(f["ratio"] for f in flows)
+    if diff:
+        flows[0]["ratio"] += diff
+
+    logger.info("구조적 가드: 노후 흐름 누락 → 소액 %d%% 주입", _RETIRE_FLOOR)
+    return flows
 
 
 async def _node_planner(state: AssetPortfolioState) -> dict:
@@ -240,6 +337,31 @@ async def _node_planner(state: AssetPortfolioState) -> dict:
         if (ai_result and ai_result.flows)
         else _FALLBACK_FLOWS
     )
+    raw_flows = _apply_structural_guard(raw_flows, state)
+
+    # gathering_asset_id는 LLM 출력을 신뢰하지 않는다 — 백엔드가 보낸 asset_list가 source of truth.
+    # 같은 account_type 계좌가 여러 개면: LLM이 고른 id가 실제 목록에 있고 종류가 맞을 때만 그 선택을 존중,
+    # 아니면 잔액이 가장 큰 계좌로 결정론적 선택. 해당 종류 계좌가 없으면 추천 상품 경로로 둔다.
+    assets_by_type: dict[str, list[dict]] = {}
+    for a in state["asset_list"]:
+        assets_by_type.setdefault(a["asset_type"], []).append(a)
+    asset_by_id = {a["asset_id"]: a for a in state["asset_list"]}
+
+    for f in raw_flows:
+        candidates = assets_by_type.get(f["account_type"], [])
+        if candidates:
+            chosen = asset_by_id.get(f.get("gathering_asset_id") or "")
+            if chosen is None or chosen["asset_type"] != f["account_type"]:
+                # LLM 선택이 무효(환각)거나 종류 불일치 → 잔액 최대 계좌로 확정
+                chosen = max(candidates, key=lambda a: a["balance"])
+            f["gathering_asset_id"] = chosen["asset_id"]
+            f["has_user_account"] = True
+            f["gathering_account_name"] = chosen["account_name"]
+            f["gathering_account_institution"] = ""
+        else:
+            # 미보유 — 추천 상품 경로 (LLM이 채운 상품 정보 유지)
+            f["gathering_asset_id"] = None
+            f["has_user_account"] = False
 
     flow_plans = [
         {
@@ -465,6 +587,17 @@ _graph = _build_graph()
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+def _safe_uuid(value) -> UUID | None:
+    """gathering_id를 UUID로 안전 파싱. 잘못된 값이면 None (500 방지)."""
+    if not value:
+        return None
+    try:
+        return UUID(str(value))
+    except (ValueError, AttributeError, TypeError):
+        logger.warning("유효하지 않은 gathering_id 무시: %r", value)
+        return None
+
+
 async def recommend_asset_portfolio(request: AssetPortfolioRequest) -> AssetPortfolioResponse:
     """외부 진입점: 요청 변환 → PEV 그래프 실행 → 응답 반환."""
     asset_list = [
@@ -496,9 +629,9 @@ async def recommend_asset_portfolio(request: AssetPortfolioRequest) -> AssetPort
                 term=f["term"],
                 summary=f["summary"],
                 reasoning=f.get("reasoning", ""),
-                gathering_id=UUID(f["gathering_id"]) if f.get("gathering_id") else None,
+                gathering_id=_safe_uuid(f.get("gathering_id")),
                 gathering_account=(
-                    None if f.get("gathering_id") else GatheringAccount(
+                    None if _safe_uuid(f.get("gathering_id")) else GatheringAccount(
                         name=f["gathering_account"].get("name", "자유적금"),
                         type=f["gathering_account"].get("type", "SAVING"),
                         institution=f["gathering_account"].get("institution", ""),
