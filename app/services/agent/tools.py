@@ -265,8 +265,22 @@ async def calculate_hrp_weights(tickers: list[str]) -> dict:
             avg_corr = round(float(corr.loc[t, others].mean()), 2) if others else 0.0
             metrics[t] = {"vol_pct": vol_pct, "avg_corr": avg_corr}
 
-        logger.info("HRP 완료 | %d일 | %s", len(prices), weight_ints)
-        return {"weights": weight_ints, "method": "hrp", "data_days": len(prices), "metrics": metrics}
+        # portfolio_performance: 연간 기대 수익률 계산 (mean historical return 기반)
+        try:
+            perf_ret, _vol, _sharpe = hrp.portfolio_performance(verbose=False, risk_free_rate=0.02)
+            expected_annual_return_pct: float | None = round(float(perf_ret) * 100, 2)
+        except Exception as perf_err:
+            logger.warning("HRP portfolio_performance 실패: %s", perf_err)
+            expected_annual_return_pct = None
+
+        logger.info("HRP 완료 | %d일 | 기대수익률: %s%% | %s", len(prices), expected_annual_return_pct, weight_ints)
+        return {
+            "weights": weight_ints,
+            "method": "hrp",
+            "data_days": len(prices),
+            "metrics": metrics,
+            "expected_annual_return_pct": expected_annual_return_pct,
+        }
 
     except Exception as e:
         logger.warning("HRP 계산 실패 → 균등 배분: %s", e)
@@ -345,6 +359,7 @@ async def search_etfs(
 ) -> list[dict]:
     """포트폴리오 슬롯에 맞는 ETF를 검색합니다.
     keywords: 자산군·테마 키워드 목록. 예) ["글로벌 주식", "채권", "S&P500"]
+             빈 목록([])으로 호출하면 키워드 무관하게 연환산 수익률 상위 ETF를 반환합니다.
     """
     results = await _search_etfs_db(keywords, limit=10)
     return [

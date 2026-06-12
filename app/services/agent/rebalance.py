@@ -52,6 +52,9 @@ class _RebalancePlan(BaseModel):
     )
 
 
+_MAX_REFLECT_ITER = 2
+
+
 class RebalanceState(TypedDict):
     salary: int
     fixed_expense: int
@@ -66,6 +69,9 @@ class RebalanceState(TypedDict):
     invest_amount: int
     allocations: list[dict]
     reasoning: str
+    feedback: str       # reflect가 plan에게 보내는 재계획 지시
+    iteration: int      # plan→reflect 사이클 횟수
+    approved: bool      # reflect가 결과를 승인했는지 여부
 
 
 
@@ -131,6 +137,12 @@ async def _plan_rebalance(state: RebalanceState) -> RebalanceState:
         for a in state["asset_list"]
     ) or "  보유 계좌 없음"
 
+    feedback = state.get("feedback", "").strip()
+    feedback_section = (
+        f"\n[이전 배분 계획 피드백 — 반드시 반영]\n{feedback}\n"
+        if feedback else ""
+    )
+
     messages = [
         SystemMessage(content=_SYSTEM),
         HumanMessage(content=(
@@ -147,6 +159,7 @@ async def _plan_rebalance(state: RebalanceState) -> RebalanceState:
             f"[제약 조건]\n"
             f"- invest_amount 허용 범위: {min_invest:,}원 ~ {max_invest:,}원 (PorTI 성향 기준)\n"
             f"- allocations 최소 계좌 수: {min_accounts}개"
+            f"{feedback_section}"
         )),
     ]
 
@@ -207,6 +220,16 @@ class _ReviewedAllocation(BaseModel):
 
 
 class _ReflectOutput(BaseModel):
+    approved: bool = Field(
+        description=(
+            "배분 결과가 모든 기준을 충족하면 True. "
+            "근본적 결함(계좌 분산 실패, 투자금 과다 등)이 있으면 False."
+        )
+    )
+    feedback: str = Field(
+        default="",
+        description="approved=False일 때 재계획에 필요한 구체적 수정 지시. approved=True이면 빈 문자열.",
+    )
     reasoning: str = Field(
         description=(
             "최종 배분 결과를 바탕으로 한 2~3문장 설명. "
@@ -220,22 +243,33 @@ class _ReflectOutput(BaseModel):
 
 
 _REFLECT_SYSTEM = (
-    "당신은 월급 배분 결과를 사용자에게 설명하는 재무 어드바이저입니다.\n\n"
-    "입력으로 제공된 [계획 reasoning]은 배분 의도를 파악하기 위한 참고 자료입니다.\n"
-    "그 내용을 그대로 쓰거나 수정하지 말고, 아래 최종 배분 결과만을 근거로 새로 작성하세요.\n\n"
-    "1. reasoning 재작성 (최종 배분 결과 기준, 완전 새로 작성):\n"
-    "   - 소비 패턴에서 가장 큰 항목과 실제 금액·비율을 언급\n"
-    "   - 투자금을 해당 금액으로 설정한 이유를 PorTI 성향과 저축 여력에 연결해 설명\n"
-    "   - 각 계좌에 해당 금액을 배분한 핵심 이유를 구체적 수치와 함께 1~2가지 설명\n"
-    "   → 2~3문장, '~했어요', '~드렸어요' 부드러운 경어체\n\n"
-    "2. 각 계좌 comment 재작성 (최종 배분 결과 기준, 완전 새로 작성):\n"
-    "   - 해당 계좌의 실제 배분 금액과 용도만을 근거로 새로 작성\n"
-    "   - 구체적인 수치(금액 또는 비율)를 반드시 포함한 1문장\n"
-    "   - 계획 단계 comment를 재활용하지 말 것\n\n"
-    "3. 극단적 배분 교정:\n"
-    "   - 단일 항목이 배분 가능액의 60%를 초과하면 초과분을 다른 계좌로 분산\n"
-    "   - 금액이 50,000원 미만인 항목은 가장 큰 항목에 합산하고 해당 항목 제거\n"
-    "   - 조정 후 합계가 배분 가능액과 반드시 일치 (천원 단위)\n\n"
+    "당신은 월급 배분 결과를 검토하는 재무 감수자입니다.\n\n"
+    "[1단계] 승인/거부 판단 (approved)\n"
+    "아래 기준 중 하나라도 해당하면 approved=False, feedback에 구체적 수정 지시 작성:\n"
+    "  - 계좌가 2개 이상인데 배분 항목이 1개뿐인 경우 (분산 배분 실패)\n"
+    "  - invest_amount가 가처분소득의 50%를 초과하는 경우\n"
+    "  - 계좌 유형과 용도가 명백히 불일치하는 경우 (예: DEPOSIT에 생활비)\n"
+    "위 기준에 해당하지 않으면 approved=True.\n\n"
+    "[2단계] approved=True일 때만 수행\n"
+    "입력으로 제공된 [계획 reasoning]은 참고용입니다. "
+    "그 내용을 그대로 쓰지 말고, 최종 배분 결과만을 근거로 새로 작성하세요.\n\n"
+    "  A. reasoning 재작성 (최종 배분 결과 기준, 완전 새로 작성):\n"
+    "     - 소비 패턴에서 가장 큰 항목과 실제 금액·비율을 언급\n"
+    "     - 투자금을 해당 금액으로 설정한 이유를 PorTI 성향과 저축 여력에 연결해 설명\n"
+    "     - 각 계좌에 해당 금액을 배분한 핵심 이유를 구체적 수치와 함께 1~2가지 설명\n"
+    "     → 2~3문장, '~했어요', '~드렸어요' 부드러운 경어체\n\n"
+    "  B. 각 계좌 comment 재작성 (최종 배분 결과 기준, 완전 새로 작성):\n"
+    "     - 해당 계좌의 실제 배분 금액과 용도만을 근거로 새로 작성\n"
+    "     - 구체적인 수치(금액 또는 비율)를 반드시 포함한 1문장\n"
+    "     - 계획 단계 comment를 재활용하지 말 것\n\n"
+    "  C. 극단적 배분 교정 (인라인 수정, 재거부 불필요):\n"
+    "     - 단일 항목이 배분 가능액의 60%를 초과하면 초과분을 다른 계좌로 분산\n"
+    "     - 금액이 50,000원 미만인 항목은 가장 큰 항목에 합산하고 해당 항목 제거\n"
+    "     - 조정 후 합계가 배분 가능액과 반드시 일치 (천원 단위)\n\n"
+    "[approved=False일 때]\n"
+    "  - feedback: 재계획 시 반드시 지켜야 할 구체적 수정 지시 (예: '계좌 2개 모두 사용하고 "
+    "CHECKING에 생활비, PARKING에 비상금으로 분산할 것')\n"
+    "  - reasoning, allocations: 원래 입력 그대로 반환 (수정 불필요)\n\n"
     "출력 규칙:\n"
     "- asset_id: 원래 값 그대로 유지 (추가·변경·삭제 금지, 단 50,000원 미만 항목 제거는 허용)\n"
     "- 모든 금액: 천원(1,000원) 단위\n"
@@ -289,7 +323,13 @@ async def _reflect(state: RebalanceState) -> RebalanceState:
 
     result = await ainvoke_structured(messages, _ReflectOutput)
     if result is None:
-        return state
+        return {**state, "approved": True}
+
+    next_iter = state.get("iteration", 0) + 1
+
+    # 거부: 재계획 필요 — allocations/reasoning은 그대로 유지
+    if not result.approved:
+        return {**state, "approved": False, "feedback": result.feedback, "iteration": next_iter}
 
     try:
         valid_ids = {a["asset_id"] for a in state["asset_list"]}
@@ -308,16 +348,33 @@ async def _reflect(state: RebalanceState) -> RebalanceState:
 
         # asset_id 검증 실패 시 원래 배분 유지하되 reasoning만 갱신
         if not reviewed:
-            return {**state, "reasoning": result.reasoning}
+            return {**state, "reasoning": result.reasoning, "approved": True, "iteration": next_iter}
 
         if remaining > 0:
             reviewed = normalize_to_thousands(reviewed, "amount", remaining)
 
-        return {**state, "reasoning": result.reasoning, "allocations": reviewed}
+        return {
+            **state,
+            "reasoning": result.reasoning,
+            "allocations": reviewed,
+            "approved": True,
+            "iteration": next_iter,
+        }
 
     except Exception as e:
         logger.warning("reflect 처리 실패, 원래 결과 유지: %s", e)
-        return {**state, "reasoning": result.reasoning if result else state["reasoning"]}
+        return {
+            **state,
+            "reasoning": result.reasoning if result else state["reasoning"],
+            "approved": True,
+            "iteration": next_iter,
+        }
+
+
+def _route_after_reflect(state: RebalanceState) -> str:
+    if not state.get("approved", True) and state.get("iteration", 0) < _MAX_REFLECT_ITER:
+        return "plan"
+    return END
 
 
 def _build_graph() -> StateGraph:
@@ -326,7 +383,7 @@ def _build_graph() -> StateGraph:
     graph.add_node("reflect", _reflect)
     graph.set_entry_point("plan")
     graph.add_edge("plan", "reflect")
-    graph.add_edge("reflect", END)
+    graph.add_conditional_edges("reflect", _route_after_reflect, {"plan": "plan", END: END})
     return graph.compile()
 
 
@@ -376,6 +433,9 @@ async def rebalance_salary(request: RebalanceRequest) -> RebalanceResponse:
         "invest_amount": 0,
         "allocations": [],
         "reasoning": "",
+        "feedback": "",
+        "iteration": 0,
+        "approved": False,
     }
 
     final_state: RebalanceState = await _graph.ainvoke(initial_state)
