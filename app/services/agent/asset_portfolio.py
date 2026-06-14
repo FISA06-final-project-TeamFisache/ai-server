@@ -1,5 +1,6 @@
 import logging
 import operator
+import re
 from datetime import datetime, timezone
 from typing import Annotated, Literal, TypedDict
 from uuid import UUID
@@ -19,7 +20,10 @@ from app.schemas.portfolio import (
 )
 from app.services.agent.gather_products import GATHER_PRODUCTS
 from app.services.agent.llm import ainvoke_structured, get_llm
-from app.services.agent.porti_types import porti_label as _porti_label
+from app.services.agent.porti_types import (
+    porti_detail as _porti_detail,
+    porti_label as _porti_label,
+)
 from app.services.agent.tools import (
     calculate_hrp_weights,
     compound_interest,
@@ -193,7 +197,7 @@ _SYSTEM_PLANNER = (
     "각 흐름에 맞는 모으기 계좌를 선택하세요.\n\n"
     "[입력 데이터 해석]\n"
     "- interest = 사용자의 '인생 목표'입니다 (예: 내집마련, 결혼, 노후, 자동차). 흐름 설계의 핵심 기준입니다.\n"
-    "- invest_interests = 투자 관심 자산군·테마입니다 (예: 미국주식, 반도체). ETF 전략 참고용일 뿐, 흐름 구조와 무관합니다.\n\n"
+    "- invest_interests = 투자 관심 자산군·테마입니다 (예: 미국주식, 반도체). 흐름 '구조'(개수·기간·비중)는 좌우하지 않지만, 투자 가능 계좌(ISA/IRP/PENSION_SAVINGS) 흐름의 invest_strategy와 reasoning에는 이 관심사를 자연스럽게 녹여 개인화에 활용하세요.\n\n"
     "[내부 분석 절차 — JSON에 포함하지 않음]\n"
     "  1단계: 투자 성향이 시사하는 위험 허용 수준 파악\n"
     "  2단계: interest(인생 목표)가 요구하는 자금 규모·달성 기간 파악\n"
@@ -204,7 +208,7 @@ _SYSTEM_PLANNER = (
     "2. 목표별 계좌 매칭:\n"
     "   - 내집마련·전세·목돈 마련 → ISA + 예적금 중심 (ISA는 비과세·유연해 3~7년 자금에 적합)\n"
     "     ※ IRP·연금저축은 만 55세까지 인출이 묶이므로 주택 자금에는 큰 비중 배분 금지\n"
-    "   - 노후·은퇴 → IRP·PENSION_SAVINGS (연말정산 세액공제). 목표가 달라도 노후 대비 소액 흐름은 항상 1개 포함\n"
+    "   - 노후·은퇴 → IRP·PENSION_SAVINGS (연말정산 세액공제). 목표가 달라도 노후 대비 소액 흐름(비중 약 10%)을 반드시 직접 1개 포함하고, 이 흐름의 reasoning·summary도 정적 문구 없이 아래 출력 규칙대로 개인화해 작성하세요\n"
     "   - 결혼·자동차 등 단기 목돈 → DEPOSIT/SAVING 중심, 여력 있으면 ISA 일부\n"
     "3. 비중은 성향을 존중하되, 활성 목표(interest) 흐름에 가장 큰 비중을 두세요.\n"
     "4. 목표가 비어 있거나('없음') 불명확하면 성향에 따른 기본 배분을 따르세요.\n\n"
@@ -235,12 +239,24 @@ _SYSTEM_PLANNER = (
     "  · 사용자의 실제 인생 목표와 PorTI 성향을 구체적으로 직접 언급 (일반론·템플릿식 표현 금지)\n"
     "  · 이 계좌·기간을 고른 핵심 이유 한 가지를 자연스럽게 포함\n"
     "  · 친근한 상담 말투(~요/~네요)로, AI가 내 상황을 읽고 골라준 듯한 인상\n"
+    "- [한국어 표기 필수] title·summary·reasoning에는 영문 계좌코드를 절대 쓰지 말고 반드시 한국어로 바꿔 쓰세요:\n"
+    "  CHECKING=입출금통장, PARKING=파킹통장, CMA=CMA, SAVING=적금, DEPOSIT=예금, ISA=ISA, IRP=IRP, PENSION_SAVINGS=연금저축\n"
+    "  (예: 'SAVING 계좌' → '적금', 'PENSION_SAVINGS 계좌' → '연금저축')\n"
     "- reasoning: 사용자에게 직접 이야기하듯 3~4문장의 개인화된 FP 상담. 아래를 구체적으로 녹이세요:\n"
     "  · 이 인생 목표에 왜 이 계좌·기간(개월 수 언급)·비중이 적합한지\n"
+    "  · 사용자 고유 수치를 최소 1개 자연스럽게 포함: 이 흐름의 투자 기간(개월) 또는 비중(%)을 우선 사용\n"
+    "    ※ '월 투자금'은 모든 흐름의 '합계'입니다. 특정 흐름 reasoning에 '월 80만원을 (이 계좌에) 넣는다'처럼 전액을 한 계좌에 넣는 표현은 금지. 금액을 언급하려면 '전체 월 투자금 ○○원 중 일부'처럼만 쓰세요\n"
     "  · 선택한 계좌의 실질 혜택(ISA 비과세, 연금 세액공제, 예적금 안정성 등)을 일상어로 풀어서\n"
-    "  · PorTI 성향과 어떻게 어울리는지 — 목표와 성향이 충돌하면 그 해소 논리를 부드럽게 설명\n"
-    "  · 따뜻하고 신뢰감 있는 말투(~요/~네요/~랍니다)로, 사용자를 안심시키는 한마디로 마무리\n"
-    "  딱딱한 한자어·사전식 정의 나열 금지. 사용자의 상황에 맞춰 구체적으로.\n\n"
+    "  · 성향을 반영하되 '균형 잡힌 투자 성향'·'안정성을 중시하는 성향' 같은 라벨을 그대로 복붙하지 말고, 이 목표·계좌 맥락에서 그 성향이 어떤 의미인지 한 문장으로 풀어 쓰세요\n"
+    "  · 투자 가능 계좌(ISA/IRP/연금) 흐름이면 사용자의 관심 자산군(invest_interests)을 한 번 자연스럽게 언급\n"
+    "  · 따뜻하고 신뢰감 있는 말투(~요/~네요/~랍니다)로 마무리\n"
+    "  딱딱한 한자어·사전식 정의 나열 금지. 사용자의 상황에 맞춰 구체적으로.\n"
+    "- [흐름 간 다양성 — 매우 중요] 흐름이 여러 개면 reasoning·summary가 서로 '복사한 듯' 보이면 안 됩니다:\n"
+    "  · 문장 순서·구조를 흐름마다 다르게 (어떤 흐름은 목표→혜택 순, 어떤 흐름은 사용자 상황→제안 순 등)\n"
+    "  · 같은 문구를 여러 흐름에 반복 금지 — 특히 '전체 월 투자금 ○○원 중 일부를', '균형 잡힌 투자 성향을 반영해', "
+    "'잘 활용해 보세요', '도움이 될 거예요', '목표를 향해 한 걸음 더~' 같은 표현은 한 흐름에서만(되도록 서로 다른 말로) 쓰세요\n"
+    "  · 흐름마다 강조점을 달리하세요: 하나는 목표의 시급성, 하나는 세제·비과세 혜택, 하나는 관심 자산군, 하나는 기간·복리 효과 등\n"
+    "  · 마무리 문장도 흐름마다 형식을 다르게(격려형/요약형/질문형 등)\n\n"
     "반드시 JSON만 응답."
 )
 
@@ -262,11 +278,11 @@ def _planner_messages(state: AssetPortfolioState) -> list:
     return [
         SystemMessage(content=_SYSTEM_PLANNER),
         HumanMessage(content=(
-            f"PorTI 유형: {_porti_label(state['porti_type'])}\n"
-            f"투자 성향 설명: {state['porti_comment']}\n"
+            f"PorTI 성향: {_porti_label(state['porti_type'])}\n"
+            f"성향 코멘트: {state['porti_comment']}\n"
             f"인생 목표(interest): {state['interest'] or '없음'}\n"
             f"투자 관심 자산군(invest_interests): {', '.join(state['invest_interests']) or '없음'}\n"
-            f"월 투자금: {state['invest_amount']:,}원\n\n"
+            f"월 총 투자금(모든 흐름 합산): {state['invest_amount']:,}원  ※ 각 흐름엔 이 금액을 비중대로 나눠 배분됩니다(흐름별 실제 금액은 더 작음)\n\n"
             f"유저 보유 계좌:\n{assets_text}\n\n"
             f"추천 가능 상품:\n{products_text}"
         )),
@@ -294,7 +310,52 @@ def _build_retire_flow(state: AssetPortfolioState) -> dict:
             flow["account_type"] = a["asset_type"]
             break
 
+    # 가드 주입 흐름 표식 — planner에서 이 흐름의 문구만 LLM으로 개인화한다(정적 템플릿 탈피)
+    flow["_injected"] = True
     return flow
+
+
+# 계좌코드 → 한국어 표기 (reasoning에 영문코드 노출 방지)
+_ACCOUNT_KR: dict[str, str] = {
+    "CHECKING": "입출금통장", "PARKING": "파킹통장", "CMA": "CMA",
+    "SAVING": "적금", "DEPOSIT": "예금", "ISA": "ISA",
+    "IRP": "IRP", "PENSION_SAVINGS": "연금저축",
+}
+
+
+class _RetireText(BaseModel):
+    summary: str
+    reasoning: str
+
+
+async def _generate_retire_text(state: AssetPortfolioState, flow: dict) -> tuple[str, str]:
+    """가드가 주입한 노후 흐름의 summary·reasoning을 LLM으로 개인화. 실패 시 정적 문구 유지."""
+    goal = (state.get("interest") or "").strip() or "현재 목표"
+    acct_kr = _ACCOUNT_KR.get(flow["account_type"], flow["account_type"])
+    messages = [
+        SystemMessage(content=(
+            "당신은 따뜻한 개인 자산관리 전문가(FP)입니다. 노후 대비 '소액' 투자 흐름에 대한 "
+            "summary(1~2문장)와 reasoning(3~4문장)을 JSON으로 작성하세요.\n"
+            "- 사용자의 인생 목표를 존중하되, 노후 자금은 일찍 시작할수록 복리·세액공제 효과가 크다는 점을 설득력 있게 풀어주세요\n"
+            f"- 계좌는 반드시 한국어 '{acct_kr}'로 표기(영문코드 금지)\n"
+            "- 비중(%)·기간(개월) 같은 수치를 최소 1개 자연스럽게 포함\n"
+            "- 성향(아래 배분 전략)을 라벨 복붙 없이 행동 차원으로 한 번 반영\n"
+            "- 상투적 마무리('도움이 될 거예요' 등)는 피하고, 따뜻한 말투(~요/~네요/~랍니다)로 마무리\n"
+            "반드시 JSON만 응답."
+        )),
+        HumanMessage(content=(
+            f"인생 목표: {goal}\n"
+            f"PorTI 성향: {_porti_detail(state['porti_type'])}\n"
+            f"노후 흐름 계좌: {acct_kr}\n"
+            f"투자 기간: {flow['investment_months']}개월\n"
+            f"전체 월 투자금 대비 이 흐름 비중: {flow['ratio']}%\n"
+            f"전체 월 투자금(모든 흐름 합산): {state['invest_amount']:,}원"
+        )),
+    ]
+    out = await ainvoke_structured(messages, _RetireText)
+    if out and out.summary and out.reasoning:
+        return out.summary, out.reasoning
+    return flow["summary"], flow["reasoning"]
 
 
 def _apply_structural_guard(flows: list[dict], state: AssetPortfolioState) -> list[dict]:
@@ -338,6 +399,11 @@ async def _node_planner(state: AssetPortfolioState) -> dict:
         else _FALLBACK_FLOWS
     )
     raw_flows = _apply_structural_guard(raw_flows, state)
+
+    # 가드가 노후 흐름을 정적으로 주입했다면, 그 흐름의 문구만 LLM으로 개인화한다(정적 템플릿 탈피).
+    for f in raw_flows:
+        if f.pop("_injected", False):
+            f["summary"], f["reasoning"] = await _generate_retire_text(state, f)
 
     # gathering_asset_id는 LLM 출력을 신뢰하지 않는다 — 백엔드가 보낸 asset_list가 source of truth.
     # 같은 account_type 계좌가 여러 개면: LLM이 고른 id가 실제 목록에 있고 종류가 맞을 때만 그 선택을 존중,
@@ -598,6 +664,50 @@ def _safe_uuid(value) -> UUID | None:
         return None
 
 
+# ── 흐름 간 마무리 문장 중복/상투구 결정론적 정리 ──────────────────────────────
+
+# 여러 흐름에서 반복되면 안 되는 상투적 마무리 표현
+_CLICHE_CLOSERS = (
+    "도움이 될 거예요", "도움이 될 거랍니다", "도움이 될 것입니다",
+    "좋은 선택이 될 거예요", "목표를 향해 한 걸음", "좋은 방법이",
+)
+
+
+def _split_sentences(text: str) -> list[str]:
+    return [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", text) if s.strip()]
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"\s+", "", text)
+
+
+def _dedupe_closings(flows: list[dict]) -> None:
+    """흐름 간 마무리 문장이 상투구이거나 이미 등장했으면 그 문장을 제거한다(in-place, LLM 호출 없음).
+
+    summary·reasoning 모두 대상. 본문(앞 문장들)의 수치·정보는 그대로 두고, 마지막의
+    의미 없는 반복 마무리만 잘라낸다. 최소 1문장은 항상 남긴다.
+    """
+    seen: set[str] = set()
+    for flow in flows:
+        for field in ("summary", "reasoning"):
+            text = flow.get(field) or ""
+            if not text:
+                continue
+            sents = _split_sentences(text)
+            # 마지막 문장이 상투구이거나 이미 쓰인 문장이면 제거 (최소 1문장 보존), 반복 적용
+            while len(sents) > 1:
+                last = sents[-1]
+                is_cliche = any(c in last for c in _CLICHE_CLOSERS)
+                is_dup = _norm(last) in seen
+                if is_cliche or is_dup:
+                    sents.pop()
+                    continue
+                break
+            if sents:
+                seen.add(_norm(sents[-1]))
+            flow[field] = " ".join(sents)
+
+
 async def recommend_asset_portfolio(request: AssetPortfolioRequest) -> AssetPortfolioResponse:
     """외부 진입점: 요청 변환 → PEV 그래프 실행 → 응답 반환."""
     asset_list = [
@@ -620,6 +730,9 @@ async def recommend_asset_portfolio(request: AssetPortfolioRequest) -> AssetPort
         "flow_plans": [],
         "investment_flows": [],
     })
+
+    # 흐름 간 마무리 문장이 중복·상투구이면 결정론적으로 그 문장만 제거 (LLM 호출 없음)
+    _dedupe_closings(final_state["investment_flows"])
 
     return AssetPortfolioResponse(
         created_at=datetime.now(timezone.utc),
