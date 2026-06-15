@@ -57,6 +57,8 @@ class ReportState(TypedDict):
     income_summary: str
     expense_summary: str
     expense_categories: list[str]
+    prev_total_expense: int
+    curr_total_expense: int
     asset_trend: str
     market_news: str
     trend_comment: str
@@ -82,9 +84,9 @@ async def _analyze_report(state: ReportState) -> ReportState:
             "{\n"
             '  "trend_comment": "전월 대비 자산/소비 변화 한 줄 분석",\n'
             '  "challenge_comment": "미니 챌린지 달성 현황 기반 한 줄 코멘트",\n'
-            '  "market_condition": "시장 뉴스 기반 한 줄 요약 (뉴스 없으면 사용자 자산 흐름 기반으로 작성)",\n'
-            '  "hover_descriptions": [{"category": "실제 지출 카테고리명", "content": "한 줄 설명"}],\n'
-            '  "guideline": "다음 달 소비/저축 가이드라인 한 줄"\n'
+            '  "market_condition": "시장 뉴스와 사용자의 투자 자산 변화를 연결한 한 줄 요약 (뉴스 없으면 사용자 자산 흐름 기반으로 작성)",\n'
+            '  "hover_descriptions": [{"category": "실제 지출 카테고리명", "content": "이번 달 총지출 대비 해당 카테고리 비중을 반영한 한 줄 설명"}],\n'
+            '  "guideline": "지출이 가장 큰 카테고리를 언급하며 다음 달 소비/저축 가이드라인 한 줄"\n'
             "}\n\n"
             "hover_descriptions는 반드시 아래 실제 지출 카테고리만 사용하세요."
         )),
@@ -93,6 +95,7 @@ async def _analyze_report(state: ReportState) -> ReportState:
             f"미니 챌린지 현황:\n{state['mini_challenges_summary']}\n\n"
             f"자산 변화:\n{state['asset_trend']}\n\n"
             f"이번 달 수입 요약:\n{state['income_summary']}\n\n"
+            f"이번 달 총지출: {state['curr_total_expense']:,}원 / 전달 총지출: {state['prev_total_expense']:,}원\n\n"
             f"이번 달 지출 요약 (hover_descriptions 카테고리는 아래 항목만 사용):\n{state['expense_summary']}"
             f"{market_section}"
         )),
@@ -143,6 +146,8 @@ async def generate_report(request: ReportRequest) -> ReportResponse:
         f"  - {cat}: {amt:,}원" for cat, amt in sorted(expense_by_category.items(), key=lambda x: -x[1])
     ) or "  지출 내역 없음"
 
+    curr_total_expense = sum(expense_by_category.values())
+
     if len(request.asset_snapshots) >= 2:
         first = request.asset_snapshots[0]
         last = request.asset_snapshots[-1]
@@ -180,6 +185,8 @@ async def generate_report(request: ReportRequest) -> ReportResponse:
         "expense_categories": list(expense_by_category.keys()),
         "income_summary": income_summary,
         "expense_summary": expense_summary,
+        "prev_total_expense": request.prev_total_expense,
+        "curr_total_expense": curr_total_expense,
         "asset_trend": asset_trend,
         "market_news": market_news,
         "trend_comment": "",
