@@ -27,6 +27,122 @@ _INVEST_RATIO: dict[str, tuple[float, float]] = {
 
 logger = logging.getLogger(__name__)
 
+# ── Few-Shot CoT 예시 라이브러리 ──────────────────────────────────────────────
+
+_FEW_SHOT_CHECKING_PARKING = (
+    "[참고 예시 — 계좌 2개: 입출금 + 파킹/CMA, PorTI: NEUTRAL(JUDO)]\n"
+    "상황: 가처분소득 200만원, 변동지출 75만원(식비·교통·여가), 저축 여력 125만원\n"
+    "계좌: A입출금통장(CHECKING, 잔액 45만원) / B파킹통장(PARKING, 잔액 3만원)\n\n"
+    "<STEP 1> 계좌 역할 결정\n"
+    "  A입출금통장(CHECKING) → 역할: 생활비  이유: 카드결제·이체 자유, 일상 소비 전담\n"
+    "  B파킹통장(PARKING)   → 역할: 비상금  이유: 고금리 유동성 계좌, 잔액 3만원으로 거의 비어 우선 충전 필요\n\n"
+    "<STEP 2> invest_amount 결정 — PorTI 허용 범위를 반드시 먼저 확인\n"
+    "  · PorTI NEUTRAL(JUDO) 허용 범위: 200만원 x 15~35% = 300,000원~700,000원\n"
+    "  · 비상금 우선 채워야 하므로 범위 하한에 가깝게 설정\n"
+    "  · invest_amount = 300,000원\n\n"
+    "<STEP 3> 나머지 배분 (가처분소득 2,000,000원 - invest_amount 300,000원 = 1,700,000원)\n"
+    "  · 식비(35만원, 17.5%)가 1위 지출 → 생활비는 변동지출 75만원 + 여유 5만원 = 800,000원\n"
+    "  · 파킹 잔액 3만원, 비상금 목표(월급 3배) 훨씬 미달 → 나머지 900,000원 전액 비상금\n\n"
+    "예시 결과: invest_amount=300,000 / CHECKING 생활비 800,000원 / PARKING 비상금 900,000원\n"
+    "합계 확인: 300,000 + 800,000 + 900,000 = 2,000,000원 ✓"
+)
+
+_FEW_SHOT_CHECKING_DEPOSIT = (
+    "[참고 예시 — 계좌 2개: 입출금 + 정기예금, PorTI: STABLE(ARCHERY)]\n"
+    "상황: 가처분소득 250만원, 변동지출 90만원, 저축 여력 160만원\n"
+    "계좌: A입출금통장(CHECKING, 잔액 120만원) / B정기예금(DEPOSIT, 잔액 500만원)\n\n"
+    "<STEP 1> 계좌 역할 결정\n"
+    "  A입출금통장(CHECKING) → 역할: 생활비  이유: 일상 지출 전담, 수시 입출금 가능\n"
+    "  B정기예금(DEPOSIT)   → 역할: 저축    이유: 장기 목돈 적립 전용, 중도해지 불이익 있어 생활비에 사용 부적합\n\n"
+    "<STEP 2> invest_amount 결정 — PorTI 허용 범위를 반드시 먼저 확인\n"
+    "  · PorTI STABLE(ARCHERY) 허용 범위: 250만원 x 10~25% = 250,000원~625,000원\n"
+    "  · 원금 보전 선호 성향 → 범위 최솟값 설정\n"
+    "  · invest_amount = 250,000원\n\n"
+    "<STEP 3> 나머지 배분 (가처분소득 2,500,000원 - invest_amount 250,000원 = 2,250,000원)\n"
+    "  · 변동지출 90만원 + 여유 20만원 = 생활비 110만원\n"
+    "  · 나머지 115만원 전액 정기예금 저축\n\n"
+    "예시 결과: invest_amount=250,000 / CHECKING 생활비 1,100,000원 / DEPOSIT 저축 1,150,000원\n"
+    "합계 확인: 250,000 + 1,100,000 + 1,150,000 = 2,500,000원 ✓"
+)
+
+_FEW_SHOT_THREE_ACCOUNTS = (
+    "[참고 예시 — 계좌 3개: 입출금 + 파킹 + 정기예금, PorTI: INVEST(CYCLING)]\n"
+    "상황: 가처분소득 300만원, 변동지출 110만원(식비·교통·쇼핑 등), 저축 여력 190만원\n"
+    "계좌: A입출금(CHECKING, 잔액 80만원) / B파킹(PARKING, 잔액 200만원) / C정기예금(DEPOSIT, 잔액 800만원)\n\n"
+    "<STEP 1> 계좌 역할 결정 — 3개 계좌 모두 역할 배정 필수\n"
+    "  A입출금(CHECKING) → 역할: 생활비  이유: 일상 소비 및 카드결제 전담\n"
+    "  B파킹(PARKING)   → 역할: 예비비  이유: 잔액 200만원으로 비상금은 어느 정도 확보됨 → 이번 달은 예비비 소액 추가\n"
+    "  C정기예금(DEPOSIT)→ 역할: 저축    이유: 장기 목돈 적립 전용, 매달 꾸준히 적립\n\n"
+    "<STEP 2> invest_amount 결정 — PorTI 허용 범위를 반드시 먼저 확인\n"
+    "  · PorTI INVEST(CYCLING) 허용 범위: 300만원 x 25~50% = 750,000원~1,500,000원\n"
+    "  · 적극적 수익 추구 성향, 저축 여력 충분 → 범위 내 적극적 설정\n"
+    "  · invest_amount = 900,000원 (범위 내 30% 수준)\n\n"
+    "<STEP 3> 나머지 배분 (가처분소득 3,000,000원 - invest_amount 900,000원 = 2,100,000원)\n"
+    "  · 변동지출 110만원 + 여유 10만원 = 생활비 120만원\n"
+    "  · 파킹 잔액 충분 → 예비비 명목 소액(50만원) 배분\n"
+    "  · 나머지 40만원 → 정기예금 저축\n\n"
+    "예시 결과: invest_amount=900,000 / CHECKING 생활비 1,200,000원 / PARKING 예비비 500,000원 / DEPOSIT 저축 400,000원\n"
+    "합계 확인: 900,000 + 1,200,000 + 500,000 + 400,000 = 3,000,000원 ✓"
+)
+
+_FEW_SHOT_FOUR_PLUS = (
+    "[참고 예시 — 계좌 4개 이상, PorTI: NEUTRAL(RHYTHMIC)]\n"
+    "상황: 가처분소득 350만원, 변동지출 130만원, 저축 여력 220만원\n"
+    "계좌: A입출금(CHECKING, 잔액 30만원) / B파킹(PARKING, 잔액 0원) / C정기예금(DEPOSIT, 잔액 1,000만원) / D CMA(CMA, 잔액 50만원)\n\n"
+    "<STEP 1> 계좌 역할 결정 — 4개 계좌 모두 역할 배정 필수, 어떤 계좌도 빠뜨리지 말 것\n"
+    "  A입출금(CHECKING) → 역할: 생활비  이유: 일상 지출 전담\n"
+    "  B파킹(PARKING)   → 역할: 비상금  이유: 잔액 0원 → 비상금 목표 미달, 최우선 충전 필요\n"
+    "  C정기예금(DEPOSIT)→ 역할: 저축    이유: 장기 목돈 적립\n"
+    "  D CMA(CMA)       → 역할: 용돈    이유: 단기 유동성 자금(여행·취미 예비비)\n\n"
+    "<STEP 2> invest_amount 결정 — PorTI 허용 범위를 반드시 먼저 확인\n"
+    "  · PorTI NEUTRAL(RHYTHMIC) 허용 범위: 350만원 x 15~35% = 525,000원~1,225,000원\n"
+    "  · 균형 투자 성향, 저축 여력 충분 → 범위 중간 설정\n"
+    "  · invest_amount = 700,000원 (범위 내 20% 수준)\n\n"
+    "<STEP 3> 나머지 배분 (가처분소득 3,500,000원 - invest_amount 700,000원 = 2,800,000원)\n"
+    "  · 변동지출 130만원 커버 → 생활비 135만원\n"
+    "  · 파킹 잔액 0원 → 비상금 최우선 100만원 충전\n"
+    "  · 나머지를 저축(35만원)·용돈(10만원)으로 분산, 금액이 작아도 역할이 다르면 배분\n\n"
+    "예시 결과: invest_amount=700,000 / CHECKING 생활비 1,350,000원 / PARKING 비상금 1,000,000원 / DEPOSIT 저축 350,000원 / CMA 용돈 100,000원\n"
+    "합계 확인: 700,000 + 1,350,000 + 1,000,000 + 350,000 + 100,000 = 3,500,000원 ✓"
+)
+
+
+def _build_few_shot_examples(asset_list: list[dict]) -> str:
+    """계좌 조합(유형·수)에 맞는 Few-Shot CoT 예시를 동적으로 선택·반환."""
+    if not asset_list or len(asset_list) < 2:
+        return ""
+    types = {a["asset_type"] for a in asset_list}
+    n = len(asset_list)
+    if n >= 4:
+        example = _FEW_SHOT_FOUR_PLUS
+    elif n == 3:
+        example = _FEW_SHOT_THREE_ACCOUNTS
+    elif types & {"PARKING", "CMA"}:
+        example = _FEW_SHOT_CHECKING_PARKING
+    elif "DEPOSIT" in types:
+        example = _FEW_SHOT_CHECKING_DEPOSIT
+    else:
+        example = _FEW_SHOT_CHECKING_PARKING
+    return (
+        "\n\n[참고: 유사 상황 추론 예시 — 아래 사고 방식을 그대로 따르되 이 사용자 데이터에 맞게 적용하세요]\n"
+        + example
+    )
+
+
+def _build_account_role_section(asset_list: list[dict]) -> str:
+    """배분 전 계좌 역할 사전 분석 CoT 섹션 생성."""
+    if len(asset_list) < 2:
+        return ""
+    lines = "\n".join(
+        f"  - {a['account_name']} ({a['asset_type']}, 잔액 {a['balance']:,}원) → 역할: ?  이유: ?"
+        for a in asset_list
+    )
+    return (
+        "\n\n[STEP 1: 배분 전 각 계좌의 역할을 먼저 결정하세요 — 모든 계좌에 역할 부여 필수]\n"
+        f"{lines}\n"
+        "→ 위 역할 결정이 reasoning의 출발점이 되어야 합니다."
+    )
+
 
 class _AllocationItem(BaseModel):
     asset_id: str = Field(default="", description="보유 계좌 목록에 있는 실제 asset_id")
@@ -42,7 +158,8 @@ class _RebalancePlan(BaseModel):
         default="",
         description=(
             "배분 결정 전 상황 분석. 소비 패턴, 저축 여력, 계좌 상태, "
-            "PorTI 성향과의 트레이드오프를 2~3문장으로 정리"
+            "투자 성향과의 트레이드오프를 2~3문장으로 정리. "
+            "JUDO·CYCLING 등 PorTI 유형 코드명은 절대 언급하지 말 것"
         ),
     )
     invest_amount: int = Field(default=0, description="투자로 별도 운용할 절대 금액(원)")
@@ -160,6 +277,8 @@ async def _plan_rebalance(state: RebalanceState) -> RebalanceState:
             f"- invest_amount 허용 범위: {min_invest:,}원 ~ {max_invest:,}원 (PorTI 성향 기준)\n"
             f"- allocations 최소 계좌 수: {min_accounts}개"
             f"{feedback_section}"
+            f"{_build_account_role_section(state['asset_list'])}"
+            f"{_build_few_shot_examples(state['asset_list'])}"
         )),
     ]
 
@@ -247,9 +366,32 @@ _REFLECT_SYSTEM = (
     "[1단계] 승인/거부 판단 (approved)\n"
     "아래 기준 중 하나라도 해당하면 approved=False, feedback에 구체적 수정 지시 작성:\n"
     "  - 계좌가 2개 이상인데 배분 항목이 1개뿐인 경우 (분산 배분 실패)\n"
-    "  - invest_amount가 가처분소득의 50%를 초과하는 경우\n"
+    "  - 사용 가능 계좌가 3개 이상인데 배분 항목이 1개 이하인 경우 (미활용 계좌 과다)\n"
+    "  - 사용 가능 계좌가 4개 이상인데 배분 항목이 2개 이하인 경우 (미활용 계좌 과다)\n"
+    "  - invest_amount가 프롬프트 내 'PorTI 허용 범위'를 벗어난 경우\n"
     "  - 계좌 유형과 용도가 명백히 불일치하는 경우 (예: DEPOSIT에 생활비)\n"
+    "  - 계좌 용도와 comment가 명백히 불일치하는 경우 (예: comment에 '비상금'이라 쓰여 있는데 account_purpose가 '저축')\n"
+    "  - DEPOSIT 계좌가 있는데 저축·목돈 관련 배분이 전혀 없는 경우 (DEPOSIT 계좌 미활용)\n"
     "위 기준에 해당하지 않으면 approved=True.\n\n"
+    "[승인/거부 판단 예시 — 경계 케이스 기준]\n"
+    "예시 A: 계좌 3개(CHECKING·PARKING·DEPOSIT), 배분 2개\n"
+    "  → approved=True  이유: '3개 이상인데 1개 이하' 기준 미해당(배분 2개 ≥ 2개)\n"
+    "  → feedback: '' (빈 문자열, 추가 요구 금지)\n\n"
+    "예시 B: 계좌 3개(CHECKING·PARKING·DEPOSIT), 배분 1개\n"
+    "  → approved=False  이유: '3개 이상인데 1개 이하' 기준 해당\n"
+    "  → feedback: 'CHECKING에 생활비 배분 외에 PARKING 또는 DEPOSIT에도 비상금/저축 배분 추가'\n\n"
+    "예시 C: 계좌 4개, 배분 2개\n"
+    "  → approved=False  이유: '4개 이상인데 2개 이하' 기준 해당\n"
+    "  → feedback: '4개 계좌 중 3개 이상 사용. 미사용 계좌에 용도에 맞는 소액이라도 배분할 것'\n\n"
+    "예시 D: invest_amount=1,500,000원, PorTI 허용 범위 500,000원~1,200,000원\n"
+    "  → approved=False  이유: invest_amount가 허용 범위 초과\n"
+    "  → feedback: 'invest_amount를 PorTI 허용 최대값 1,200,000원 이하로 줄이고, 차액 300,000원을 allocations에 추가 배분'\n\n"
+    "예시 E: CHECKING 계좌 — account_purpose='비상금', comment='식비와 교통비가 커서 생활비를 넉넉히 배분했어요'\n"
+    "  → approved=False  이유: comment는 '생활비 배분'을 설명하는데 account_purpose='비상금'으로 내용이 불일치\n"
+    "  → feedback: 'CHECKING 계좌 account_purpose를 \"생활비\"로 수정. comment가 생활비 배분을 설명하고 있어 용도도 \"생활비\"여야 함'\n\n"
+    "예시 F: PARKING 계좌 — account_purpose='저축', comment='비상금이 3만원뿐이라 우선 채워드렸어요'\n"
+    "  → approved=False  이유: comment는 '비상금 충전'을 설명하는데 account_purpose='저축'으로 내용이 불일치\n"
+    "  → feedback: 'PARKING 계좌 account_purpose를 \"비상금\"으로 수정. comment가 비상금 충전을 설명하고 있어 용도도 \"비상금\"이어야 함'\n\n"
     "[2단계] approved=True일 때만 수행\n"
     "입력으로 제공된 [계획 reasoning]은 참고용입니다. "
     "그 내용을 그대로 쓰지 말고, 최종 배분 결과만을 근거로 새로 작성하세요.\n\n"
@@ -257,7 +399,8 @@ _REFLECT_SYSTEM = (
     "     - 소비 패턴에서 가장 큰 항목과 실제 금액·비율을 언급\n"
     "     - 투자금을 해당 금액으로 설정한 이유를 PorTI 성향과 저축 여력에 연결해 설명\n"
     "     - 각 계좌에 해당 금액을 배분한 핵심 이유를 구체적 수치와 함께 1~2가지 설명\n"
-    "     → 2~3문장, '~했어요', '~드렸어요' 부드러운 경어체\n\n"
+    "     → 2~3문장, '~했어요', '~드렸어요' 부드러운 경어체\n"
+    "     → JUDO·CYCLING 등 PorTI 유형 코드명은 절대 쓰지 말 것\n\n"
     "  B. 각 계좌 comment 재작성 (최종 배분 결과 기준, 완전 새로 작성):\n"
     "     - 해당 계좌의 실제 배분 금액과 용도만을 근거로 새로 작성\n"
     "     - 구체적인 수치(금액 또는 비율)를 반드시 포함한 1문장\n"
@@ -267,8 +410,8 @@ _REFLECT_SYSTEM = (
     "     - 금액이 50,000원 미만인 항목은 가장 큰 항목에 합산하고 해당 항목 제거\n"
     "     - 조정 후 합계가 배분 가능액과 반드시 일치 (천원 단위)\n\n"
     "[approved=False일 때]\n"
-    "  - feedback: 재계획 시 반드시 지켜야 할 구체적 수정 지시 (예: '계좌 2개 모두 사용하고 "
-    "CHECKING에 생활비, PARKING에 비상금으로 분산할 것')\n"
+    "  - feedback: 재계획 시 반드시 지켜야 할 구체적 수정 지시 "
+    "(예: '계좌 2개 모두 사용하고 CHECKING에 생활비, PARKING에 비상금으로 분산할 것')\n"
     "  - reasoning, allocations: 원래 입력 그대로 반환 (수정 불필요)\n\n"
     "출력 규칙:\n"
     "- asset_id: 원래 값 그대로 유지 (추가·변경·삭제 금지, 단 50,000원 미만 항목 제거는 허용)\n"
