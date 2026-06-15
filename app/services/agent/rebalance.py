@@ -25,6 +25,12 @@ _INVEST_RATIO: dict[str, tuple[float, float]] = {
     **{t: (0.25, 0.50) for t in INVEST_PORTI_TYPES},
 }
 
+# 계좌코드 → 한국어 표기 (reasoning·comment에 영문코드 노출 방지)
+_ACCOUNT_KR: dict[str, str] = {
+    "CHECKING": "입출금통장", "PARKING": "파킹통장",
+    "DEPOSIT": "예금", "CMA": "CMA",
+}
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,7 +40,7 @@ class _AllocationItem(BaseModel):
         default="기타", description="배분 용도 — 투자 관련 용어 사용 불가"
     )
     amount: int = Field(default=0, description="가처분소득 중 배분할 금액(원)")
-    comment: str = Field(default="", description="배분 근거 한 줄 설명")
+    comment: str = Field(default="", description="왜 이 계좌·용도인지 한 줄 설명 (배분 금액(원)은 쓰지 말 것)")
 
 
 class _RebalancePlan(BaseModel):
@@ -108,11 +114,16 @@ _SYSTEM = (
     "  - asset_id: 보유 계좌의 실제 UUID (변경·중복 금지)\n"
     "  - account_purpose: 계좌 유형 가이드에 맞는 한글 용도명\n"
     "  - amount: 배분 금액(원), 반드시 천원 단위\n"
-    "  - comment: 실제 수치 언급 1문장\n"
-    "    예) '식비가 소득의 14.7%라 생활비를 넉넉히 잡았어요'\n"
-    "    예) '파킹통장 잔액이 0원이라 비상금을 일부 채워드렸어요'\n"
-    "    예) '저축 여력이 충분해 정기예금에 저축을 배분했어요'\n"
+    "  - comment: 왜 이 계좌·용도인지 1문장. 배분 '금액(원)'은 쓰지 마세요(금액은 따로 표시되고 사후 조정됨). "
+    "소비 비율(%)·계좌 잔액 같은 고정 사실은 언급 가능\n"
+    "    예) '식비가 소득의 14.7%라 생활비 비중을 넉넉히 잡았어요'\n"
+    "    예) '파킹통장 잔액이 0원이라 비상금부터 채워드렸어요'\n"
+    "    예) '저축 여력이 넉넉해 예금에 저축을 더했어요'\n"
     "- 핵심 제약: invest_amount + sum(amount) = 가처분소득\n"
+    "- [한국어 표기] reasoning·comment에 CHECKING/PARKING/DEPOSIT/CMA 같은 영문 코드를 쓰지 말고 한국어로: "
+    "입출금통장/파킹통장/예금/CMA\n"
+    "- reasoning은 실제로 '배분한 계좌·용도'만 다루세요. 배분하지 않은 계좌 유형은 언급 금지\n"
+    "- 성향·소비를 일반론('균형 잡힌 성향')으로 뭉뚱그리지 말고 이 사용자의 실제 수치(예: 식비 비율)로 구체화\n"
     "- 이모지·이모티콘 사용 금지\n"
 )
 
@@ -133,7 +144,8 @@ async def _plan_rebalance(state: RebalanceState) -> RebalanceState:
 
     # 계좌 목록: 잔액 포함
     asset_lines = "\n".join(
-        f"  - asset_id: {a['asset_id']}, {a['account_name']} ({a['asset_type']}) 잔액: {a['balance']:,}원"
+        f"  - asset_id: {a['asset_id']}, {a['account_name']} "
+        f"({_ACCOUNT_KR.get(a['asset_type'], a['asset_type'])}) 잔액: {a['balance']:,}원"
         for a in state["asset_list"]
     ) or "  보유 계좌 없음"
 
@@ -216,7 +228,7 @@ class _ReviewedAllocation(BaseModel):
         description="배분 용도"
     )
     amount: int = Field(description="조정된 배분 금액(원), 천원 단위")
-    comment: str = Field(description="실제 수치(금액 또는 비율)를 포함한 근거 1문장")
+    comment: str = Field(description="왜 이 용도인지 1문장 (배분 금액(원)은 쓰지 말 것, 소비 비율 등 고정 사실은 가능)")
 
 
 class _ReflectOutput(BaseModel):
@@ -233,8 +245,9 @@ class _ReflectOutput(BaseModel):
     reasoning: str = Field(
         description=(
             "최종 배분 결과를 바탕으로 한 2~3문장 설명. "
-            "반드시 ① 소비 패턴에서 큰 항목, ② 투자금 설정 이유(PorTI 성향·저축 여력), "
-            "③ 계좌 배분 전략 중 2가지 이상을 구체적 수치와 함께 포함"
+            "① 소비 패턴에서 큰 항목(소비 비율 %), ② 투자금 설정 이유(PorTI 성향·저축 여력), "
+            "③ 계좌 배분 전략 중 2가지 이상 포함. "
+            "단, 계좌별 배분 '금액(원)'은 쓰지 말 것(사후 조정됨) — 소비 비율 등 고정 수치만. 계좌는 한국어로 표기"
         )
     )
     allocations: list[_ReviewedAllocation] = Field(
@@ -254,14 +267,15 @@ _REFLECT_SYSTEM = (
     "입력으로 제공된 [계획 reasoning]은 참고용입니다. "
     "그 내용을 그대로 쓰지 말고, 최종 배분 결과만을 근거로 새로 작성하세요.\n\n"
     "  A. reasoning 재작성 (최종 배분 결과 기준, 완전 새로 작성):\n"
-    "     - 소비 패턴에서 가장 큰 항목과 실제 금액·비율을 언급\n"
-    "     - 투자금을 해당 금액으로 설정한 이유를 PorTI 성향과 저축 여력에 연결해 설명\n"
-    "     - 각 계좌에 해당 금액을 배분한 핵심 이유를 구체적 수치와 함께 1~2가지 설명\n"
+    "     - 소비 패턴에서 가장 큰 항목과 그 비율(%)을 언급\n"
+    "     - 투자금 설정 이유를 PorTI 성향과 저축 여력에 연결해 설명\n"
+    "     - 각 계좌에 그 용도로 배분한 핵심 이유를 1~2가지 설명\n"
+    "     - 계좌별 배분 '금액(원)'은 쓰지 말 것(사후 조정으로 달라짐) — 소비 비율 등 고정 수치만 사용\n"
     "     → 2~3문장, '~했어요', '~드렸어요' 부드러운 경어체\n\n"
     "  B. 각 계좌 comment 재작성 (최종 배분 결과 기준, 완전 새로 작성):\n"
-    "     - 해당 계좌의 실제 배분 금액과 용도만을 근거로 새로 작성\n"
-    "     - 구체적인 수치(금액 또는 비율)를 반드시 포함한 1문장\n"
-    "     - 계획 단계 comment를 재활용하지 말 것\n\n"
+    "     - 그 계좌의 용도와 '왜 그 용도인지'를 사용자 소비패턴·계좌상태·성향으로 설명\n"
+    "     - 배분 '금액(원)'은 쓰지 말 것(금액은 별도 표시·사후 조정됨). 소비 비율(%) 같은 고정 사실은 가능\n"
+    "     - 계획 단계 comment를 재활용하지 말고, 계좌마다 다른 내용으로\n\n"
     "  C. 극단적 배분 교정 (인라인 수정, 재거부 불필요):\n"
     "     - 단일 항목이 배분 가능액의 60%를 초과하면 초과분을 다른 계좌로 분산\n"
     "     - 금액이 50,000원 미만인 항목은 가장 큰 항목에 합산하고 해당 항목 제거\n"
@@ -273,6 +287,7 @@ _REFLECT_SYSTEM = (
     "출력 규칙:\n"
     "- asset_id: 원래 값 그대로 유지 (추가·변경·삭제 금지, 단 50,000원 미만 항목 제거는 허용)\n"
     "- 모든 금액: 천원(1,000원) 단위\n"
+    "- [한국어 표기] reasoning·comment에 CHECKING/PARKING/DEPOSIT/CMA 영문 코드 금지 → 입출금통장/파킹통장/예금/CMA\n"
     "- 이모지·이모티콘 사용 금지\n"
 )
 

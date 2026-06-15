@@ -15,7 +15,7 @@ from app.schemas.mini_challenge import (
     MiniChallengeResponse,
 )
 from app.services.agent.llm import ainvoke_structured
-from app.services.agent.tools import get_all_prices
+from app.services.agent.tools import get_all_prices, ticker_to_name
 from app.services.session import get_session, save_session
 
 logger = logging.getLogger(__name__)
@@ -147,7 +147,12 @@ async def propose_mini_challenge(req: MiniChallengeRequest) -> MiniChallengeResp
     if result:
         session.setdefault("proposals", []).append({**result.model_dump(), "feedback": ""})
         await save_session(req.user_id, session)
-        return MiniChallengeResponse(created_at=datetime.now(timezone.utc), **result.model_dump())
+        data = result.model_dump()
+        return MiniChallengeResponse(
+            created_at=datetime.now(timezone.utc),
+            ticker_name=ticker_to_name(data.get("ticker")) or "",
+            **data,
+        )
 
     await save_session(req.user_id, session)
     return _default_challenge_response()
@@ -193,7 +198,12 @@ async def adjust_challenge(req: AdjustRequest) -> AdjustResponse:
     if result:
         session.setdefault("proposals", []).append({**result.model_dump(), "feedback": req.feedback})
         await save_session(req.user_id, session)
-        return AdjustResponse(created_at=datetime.now(timezone.utc), **result.model_dump())
+        data = result.model_dump()
+        return AdjustResponse(
+            created_at=datetime.now(timezone.utc),
+            ticker_name=ticker_to_name(data.get("ticker")) or "",
+            **data,
+        )
 
     await save_session(req.user_id, session)
     return AdjustResponse(
@@ -204,6 +214,7 @@ async def adjust_challenge(req: AdjustRequest) -> AdjustResponse:
         category="기타",
         description="조금 더 쉬운 목표로 다시 도전해보세요.",
         ticker="005930.KS",
+        ticker_name="삼성전자",
         estimated_saving=0,
         challenge_sub_type="COFFEE",
     )
@@ -224,5 +235,6 @@ def _default_challenge_response() -> MiniChallengeResponse:
         challenge_type=ChallengeType.COUNT,
         estimated_saving=0,
         ticker="005930.KS",
+        ticker_name="삼성전자",
         challenge_sub_type="COFFEE",
     )
