@@ -39,7 +39,7 @@ class ReportRequest(BaseModel):
     mini_challenges: list[MiniChallenges] | None
     asset_snapshots: list[AssetSnapshot]
     transaction_log: list[TransactionLog]
-    prev_total_expense: int
+    prev_total_expense: int | None = None
 
 
 class ReportResponse(BaseModel):

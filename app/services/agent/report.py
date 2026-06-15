@@ -57,7 +57,7 @@ class ReportState(TypedDict):
     income_summary: str
     expense_summary: str
     expense_categories: list[str]
-    prev_total_expense: int
+    prev_total_expense: int | None
     curr_total_expense: int
     asset_trend: str
     market_news: str
@@ -73,6 +73,12 @@ async def _analyze_report(state: ReportState) -> ReportState:
         f"\n최신 시장 뉴스:\n{state['market_news']}"
         if state["market_news"]
         else "\n(시장 데이터 없음 — market_condition은 사용자 데이터 기반으로만 작성)"
+    )
+
+    expense_line = (
+        f"이번 달 총지출: {state['curr_total_expense']:,}원 / 전달 총지출: {state['prev_total_expense']:,}원\n\n"
+        if state["prev_total_expense"] is not None
+        else f"이번 달 총지출: {state['curr_total_expense']:,}원\n\n"
     )
 
     messages = [
@@ -95,7 +101,7 @@ async def _analyze_report(state: ReportState) -> ReportState:
             f"미니 챌린지 현황:\n{state['mini_challenges_summary']}\n\n"
             f"자산 변화:\n{state['asset_trend']}\n\n"
             f"이번 달 수입 요약:\n{state['income_summary']}\n\n"
-            f"이번 달 총지출: {state['curr_total_expense']:,}원 / 전달 총지출: {state['prev_total_expense']:,}원\n\n"
+            f"{expense_line}"
             f"이번 달 지출 요약 (hover_descriptions 카테고리는 아래 항목만 사용):\n{state['expense_summary']}"
             f"{market_section}"
         )),
