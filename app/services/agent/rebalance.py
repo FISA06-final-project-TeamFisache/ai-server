@@ -25,6 +25,12 @@ _INVEST_RATIO: dict[str, tuple[float, float]] = {
     **{t: (0.25, 0.50) for t in INVEST_PORTI_TYPES},
 }
 
+# 계좌코드 → 한국어 표기 (reasoning·comment에 영문코드 노출 방지)
+_ACCOUNT_KR: dict[str, str] = {
+    "CHECKING": "입출금통장", "PARKING": "파킹통장",
+    "DEPOSIT": "예금", "CMA": "CMA",
+}
+
 logger = logging.getLogger(__name__)
 
 # ── Few-Shot CoT 예시 라이브러리 ──────────────────────────────────────────────
@@ -261,6 +267,10 @@ _SYSTEM = (
     "①소비 카테고리 ②계좌 잔액 상태 ③투자 성향과 허용 범위 내 위치, 3가지 모두 포함. "
     "구체적 배분 금액(원)·배분 비율 언급 절대 금지\n"
     "- 핵심 제약: invest_amount + sum(amount) = 가처분소득\n"
+    "- [한국어 표기] reasoning·comment에 CHECKING/PARKING/DEPOSIT/CMA 같은 영문 코드를 쓰지 말고 한국어로: "
+    "입출금통장/파킹통장/예금/CMA\n"
+    "- reasoning은 실제로 '배분한 계좌·용도'만 다루세요. 배분하지 않은 계좌 유형은 언급 금지\n"
+    "- 성향·소비를 일반론('균형 잡힌 성향')으로 뭉뚱그리지 말고 이 사용자의 실제 수치(예: 식비 비율)로 구체화\n"
     "- 이모지·이모티콘 사용 금지\n"
 )
 
@@ -281,7 +291,8 @@ async def _plan_rebalance(state: RebalanceState) -> RebalanceState:
 
     # 계좌 목록: 잔액 포함
     asset_lines = "\n".join(
-        f"  - asset_id: {a['asset_id']}, {a['account_name']} ({a['asset_type']}) 잔액: {a['balance']:,}원"
+        f"  - asset_id: {a['asset_id']}, {a['account_name']} "
+        f"({_ACCOUNT_KR.get(a['asset_type'], a['asset_type'])}) 잔액: {a['balance']:,}원"
         for a in state["asset_list"]
     ) or "  보유 계좌 없음"
 

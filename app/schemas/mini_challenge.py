@@ -37,6 +37,7 @@ class MiniChallengeResponse(BaseModel):
     challenge_type: ChallengeType
     estimated_saving: int
     ticker: str
+    ticker_name: str = ""   # 보상 종목 한글명 (화면 표시용)
     challenge_sub_type: str
 
 
@@ -57,6 +58,7 @@ class AdjustResponse(BaseModel):
     category: str
     description: str
     ticker: str
+    ticker_name: str = ""   # 보상 종목 한글명 (화면 표시용)
     estimated_saving: int
     challenge_sub_type: str
 
