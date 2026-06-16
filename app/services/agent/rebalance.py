@@ -150,22 +150,29 @@ class _AllocationItem(BaseModel):
         default="기타", description="배분 용도 — 투자 관련 용어 사용 불가"
     )
     amount: int = Field(default=0, description="가처분소득 중 배분할 금액(원)")
-    comment: str = Field(default="", description="배분 근거 한 줄 설명")
+    comment: str = Field(
+        default="",
+        description=(
+            "배분 근거 한 줄 설명. 구체적 배분 금액(원)이나 배분 비율은 절대 언급 금지 — "
+            "용도와 이유만 서술 (예: '식비 비중이 커서 생활비를 넉넉히 배분했어요')"
+        ),
+    )
 
 
 class _RebalancePlan(BaseModel):
-    reasoning: str = Field(
-        default="",
-        description=(
-            "배분 결정 전 상황 분석. 소비 패턴, 저축 여력, 계좌 상태, "
-            "투자 성향과의 트레이드오프를 2~3문장으로 정리. "
-            "JUDO·CYCLING 등 PorTI 유형 코드명은 절대 언급하지 말 것"
-        ),
-    )
     invest_amount: int = Field(default=0, description="투자로 별도 운용할 절대 금액(원)")
     allocations: list[_AllocationItem] = Field(
         default_factory=list,
         description="나머지 금액을 배분할 계좌 목록",
+    )
+    reasoning: str = Field(
+        default="",
+        description=(
+            "위에서 결정한 invest_amount, allocations를 다 정한 뒤 마지막에 작성하는 결과 설명. "
+            "소비 패턴, 저축 여력, 계좌 상태, 투자 성향과의 트레이드오프를 2~3문장으로 정리. "
+            "구체적 배분 금액(원)이나 배분 비율은 절대 언급 금지 — 우선순위와 이유만 서술. "
+            "JUDO·CYCLING 등 PorTI 유형 코드명은 절대 언급하지 말 것"
+        ),
     )
 
 
@@ -203,32 +210,32 @@ _SYSTEM = (
     "2. 비상금 — 월급의 3~6배를 목표로 배분\n"
     "3. 예비비 — 월급의 10% 정도를 예비비 명목으로 저축(DEPOSIT 또는 PARKING)\n"
     "4. 용돈·여행 등 — 소비 패턴을 보고 특수한 영역 있으면 별도 배분\n\n"
-    "균형 배분 규칙 (필수 준수):\n"
+    "균형 배분 규칙 (필수 준수 — 위반 시 재계획 요구됨):\n"
     "- 보유 계좌가 2개 이상이면 반드시 2가지 이상 다른 용도로 분산 배분\n"
     "- 단일 항목이 가처분소득의 60%를 초과하지 않도록 균형 있게 배분\n"
     "- 각 배분 항목 금액: 최소 50,000원 이상\n"
     "- 모든 금액: 반드시 천원(1,000원) 단위\n\n"
-    "1단계 — reasoning (결정 전 반드시 먼저 작성)\n"
-    "  소비 패턴과 재무 상황을 분석하세요:\n"
-    "  · 어떤 소비 항목이 크고, 생활비로 얼마가 필요한가?\n"
-    "  · 보유 중인 계좌가 비상금, 예비비를 보유하고 있는가?\n"
-    "  · PorTI 성향에 맞는 투자금 규모는?\n"
-    "  → 이 분석을 reasoning에 2~3문장으로 정리\n\n"
-    "2단계 — 배분 결정\n"
-    "  reasoning을 바탕으로 금액을 결정하세요.\n"
-    "  금액은 반드시 천원(1,000원) 단위로만 입력하세요.\n"
-    "  각 comment는 reasoning의 실제 근거를 담은 1문장\n\n"
+    "결정 순서:\n"
+    "1. 먼저 소비 패턴과 재무 상황을 분석하세요 (출력하지 않고 내부적으로만 판단):\n"
+    "   · 어떤 소비 항목이 크고, 생활비로 얼마가 필요한가?\n"
+    "   · 보유 중인 계좌가 비상금, 예비비를 보유하고 있는가?\n"
+    "   · PorTI 성향에 맞는 투자금 규모는?\n"
+    "2. 그 분석을 바탕으로 invest_amount와 allocations(금액 포함)을 먼저 확정하세요.\n"
+    "3. invest_amount, allocations를 모두 정한 뒤, 마지막으로 그 결과를 reasoning에 정리하세요.\n"
+    "   reasoning은 이미 정해진 배분 결과에 대한 사후 설명이며, 금액을 바꾸는 근거가 아닙니다.\n\n"
     "출력 규칙:\n"
-    "- reasoning: 배분 결정 전 상황 분석 (2~3문장)\n"
     "- invest_amount: 투자 운용금(원), 가처분소득 초과 불가, 천원 단위\n"
     "- allocations:\n"
     "  - asset_id: 보유 계좌의 실제 UUID (변경·중복 금지)\n"
     "  - account_purpose: 계좌 유형 가이드에 맞는 한글 용도명\n"
     "  - amount: 배분 금액(원), 반드시 천원 단위\n"
-    "  - comment: 실제 수치 언급 1문장\n"
-    "    예) '식비가 소득의 14.7%라 생활비를 넉넉히 잡았어요'\n"
-    "    예) '파킹통장 잔액이 0원이라 비상금을 일부 채워드렸어요'\n"
+    "  - comment: 1문장, 구체적 배분 금액(원)·배분 비율 언급 절대 금지. "
+    "소비 카테고리 비율 등 입력 데이터 사실은 언급 가능\n"
+    "    예) '식비 비중이 커서 생활비를 넉넉히 배분했어요'\n"
+    "    예) '파킹통장 잔액이 거의 없어 비상금을 우선 채워드렸어요'\n"
     "    예) '저축 여력이 충분해 정기예금에 저축을 배분했어요'\n"
+    "- reasoning: 2~3문장, 위 allocations를 다 정한 뒤 마지막에 작성. "
+    "구체적 배분 금액(원)·배분 비율 언급 절대 금지\n"
     "- 핵심 제약: invest_amount + sum(amount) = 가처분소득\n"
     "- 이모지·이모티콘 사용 금지\n"
 )
@@ -329,41 +336,22 @@ async def _plan_rebalance(state: RebalanceState) -> RebalanceState:
         return {**state, "invest_amount": default_invest, "allocations": [], "reasoning": ""}
 
 
-class _ReviewedAllocation(BaseModel):
-    asset_id: str = Field(description="원래 asset_id 그대로 유지 (변경 금지)")
-    account_purpose: Literal["생활비", "비상금", "용돈", "저축", "여행", "기타"] = Field(
-        description="배분 용도"
-    )
-    amount: int = Field(description="조정된 배분 금액(원), 천원 단위")
-    comment: str = Field(description="실제 수치(금액 또는 비율)를 포함한 근거 1문장")
-
-
 class _ReflectOutput(BaseModel):
     approved: bool = Field(
         description=(
             "배분 결과가 모든 기준을 충족하면 True. "
-            "근본적 결함(계좌 분산 실패, 투자금 과다 등)이 있으면 False."
+            "근본적 결함(계좌 분산 실패, 투자금 과다, 극단적 배분, reasoning 불일치 등)이 있으면 False."
         )
     )
     feedback: str = Field(
         default="",
         description="approved=False일 때 재계획에 필요한 구체적 수정 지시. approved=True이면 빈 문자열.",
     )
-    reasoning: str = Field(
-        description=(
-            "최종 배분 결과를 바탕으로 한 2~3문장 설명. "
-            "반드시 ① 소비 패턴에서 큰 항목, ② 투자금 설정 이유(PorTI 성향·저축 여력), "
-            "③ 계좌 배분 전략 중 2가지 이상을 구체적 수치와 함께 포함"
-        )
-    )
-    allocations: list[_ReviewedAllocation] = Field(
-        description="점검 완료된 배분 목록 (asset_id 원본 순서 유지)"
-    )
 
 
 _REFLECT_SYSTEM = (
-    "당신은 월급 배분 결과를 검토하는 재무 감수자입니다.\n\n"
-    "[1단계] 승인/거부 판단 (approved)\n"
+    "당신은 월급 배분 결과를 검토하는 재무 감수자입니다. 배분 내용을 수정하지 않고 "
+    "승인(approved) 여부만 판단합니다. 거부 시 feedback으로 재계획을 요청하세요.\n\n"
     "아래 기준 중 하나라도 해당하면 approved=False, feedback에 구체적 수정 지시 작성:\n"
     "  - 계좌가 2개 이상인데 배분 항목이 1개뿐인 경우 (분산 배분 실패)\n"
     "  - 사용 가능 계좌가 3개 이상인데 배분 항목이 1개 이하인 경우 (미활용 계좌 과다)\n"
@@ -372,6 +360,11 @@ _REFLECT_SYSTEM = (
     "  - 계좌 유형과 용도가 명백히 불일치하는 경우 (예: DEPOSIT에 생활비)\n"
     "  - 계좌 용도와 comment가 명백히 불일치하는 경우 (예: comment에 '비상금'이라 쓰여 있는데 account_purpose가 '저축')\n"
     "  - DEPOSIT 계좌가 있는데 저축·목돈 관련 배분이 전혀 없는 경우 (DEPOSIT 계좌 미활용)\n"
+    "  - 단일 항목이 배분 가능 잔액의 60%를 초과하는 경우 (극단적 배분)\n"
+    "  - 배분 항목 중 금액이 50,000원 미만인 항목이 있는 경우 (극단적 배분)\n"
+    "  - reasoning이 서술한 우선순위·전략이 실제 allocations의 배분 구조와 명백히 불일치하는 경우 "
+    "(예: reasoning은 '비상금을 가장 많이 채웠다'고 하는데 실제로는 생활비 항목이 가장 큼)\n"
+    "  - reasoning 또는 comment에 구체적 배분 금액(원)이나 배분 비율이 언급된 경우\n"
     "위 기준에 해당하지 않으면 approved=True.\n\n"
     "[승인/거부 판단 예시 — 경계 케이스 기준]\n"
     "예시 A: 계좌 3개(CHECKING·PARKING·DEPOSIT), 배분 2개\n"
@@ -392,30 +385,14 @@ _REFLECT_SYSTEM = (
     "예시 F: PARKING 계좌 — account_purpose='저축', comment='비상금이 3만원뿐이라 우선 채워드렸어요'\n"
     "  → approved=False  이유: comment는 '비상금 충전'을 설명하는데 account_purpose='저축'으로 내용이 불일치\n"
     "  → feedback: 'PARKING 계좌 account_purpose를 \"비상금\"으로 수정. comment가 비상금 충전을 설명하고 있어 용도도 \"비상금\"이어야 함'\n\n"
-    "[2단계] approved=True일 때만 수행\n"
-    "입력으로 제공된 [계획 reasoning]은 참고용입니다. "
-    "그 내용을 그대로 쓰지 말고, 최종 배분 결과만을 근거로 새로 작성하세요.\n\n"
-    "  A. reasoning 재작성 (최종 배분 결과 기준, 완전 새로 작성):\n"
-    "     - 소비 패턴에서 가장 큰 항목과 실제 금액·비율을 언급\n"
-    "     - 투자금을 해당 금액으로 설정한 이유를 PorTI 성향과 저축 여력에 연결해 설명\n"
-    "     - 각 계좌에 해당 금액을 배분한 핵심 이유를 구체적 수치와 함께 1~2가지 설명\n"
-    "     → 2~3문장, '~했어요', '~드렸어요' 부드러운 경어체\n"
-    "     → JUDO·CYCLING 등 PorTI 유형 코드명은 절대 쓰지 말 것\n\n"
-    "  B. 각 계좌 comment 재작성 (최종 배분 결과 기준, 완전 새로 작성):\n"
-    "     - 해당 계좌의 실제 배분 금액과 용도만을 근거로 새로 작성\n"
-    "     - 구체적인 수치(금액 또는 비율)를 반드시 포함한 1문장\n"
-    "     - 계획 단계 comment를 재활용하지 말 것\n\n"
-    "  C. 극단적 배분 교정 (인라인 수정, 재거부 불필요):\n"
-    "     - 단일 항목이 배분 가능액의 60%를 초과하면 초과분을 다른 계좌로 분산\n"
-    "     - 금액이 50,000원 미만인 항목은 가장 큰 항목에 합산하고 해당 항목 제거\n"
-    "     - 조정 후 합계가 배분 가능액과 반드시 일치 (천원 단위)\n\n"
-    "[approved=False일 때]\n"
-    "  - feedback: 재계획 시 반드시 지켜야 할 구체적 수정 지시 "
-    "(예: '계좌 2개 모두 사용하고 CHECKING에 생활비, PARKING에 비상금으로 분산할 것')\n"
-    "  - reasoning, allocations: 원래 입력 그대로 반환 (수정 불필요)\n\n"
+    "예시 G: 배분 가능 잔액 1,700,000원, CHECKING 1,200,000원 / PARKING 500,000원\n"
+    "  → approved=False  이유: CHECKING이 잔액의 70%로 60% 상한 초과 (극단적 배분)\n"
+    "  → feedback: 'CHECKING 배분을 잔액의 60%(1,020,000원) 이하로 줄이고 차액을 PARKING 등 다른 계좌로 분산'\n\n"
+    "예시 H: reasoning='소비 패턴상 비상금을 최우선으로 채웠습니다', 실제 배분은 생활비 900,000원 > 비상금 300,000원\n"
+    "  → approved=False  이유: reasoning의 서술('비상금 최우선')이 실제 배분 구조(생활비가 더 큼)와 불일치\n"
+    "  → feedback: 'reasoning을 실제 배분 결과(생활비 최우선)에 맞게 다시 작성하거나, 배분을 reasoning 의도에 맞게 수정할 것'\n\n"
     "출력 규칙:\n"
-    "- asset_id: 원래 값 그대로 유지 (추가·변경·삭제 금지, 단 50,000원 미만 항목 제거는 허용)\n"
-    "- 모든 금액: 천원(1,000원) 단위\n"
+    "- approved=True이면 feedback은 반드시 빈 문자열\n"
     "- 이모지·이모티콘 사용 금지\n"
 )
 
@@ -424,94 +401,51 @@ async def _reflect(state: RebalanceState) -> RebalanceState:
     if not state["allocations"]:
         return state
 
+    next_iter = state.get("iteration", 0) + 1
+
     spendable = state["spendable"]
     invest_amount = state["invest_amount"]
     remaining = spendable - invest_amount
-    single_cap = round(remaining * 0.6 / 1000) * 1000
 
+    min_ratio, max_ratio = _INVEST_RATIO.get(state["porti_type"], (0.15, 0.35))
+    min_invest = round(spendable * min_ratio / 1000) * 1000
+    max_invest = round(spendable * max_ratio / 1000) * 1000
+
+    n_accounts = len(state["asset_list"])
+    n_alloc = len(state["allocations"])
+    asset_types_str = ", ".join(sorted({a["asset_type"] for a in state["asset_list"]}))
+
+    id_to_type = {a["asset_id"]: a["asset_type"] for a in state["asset_list"]}
     alloc_lines = "\n".join(
-        f"  - asset_id: {a['asset_id']}, {a['account_purpose']}: {a['amount']:,}원"
+        f"  - asset_id: {a['asset_id']} ({id_to_type.get(a['asset_id'], '?')}), "
+        f"account_purpose: {a['account_purpose']}, amount: {a['amount']:,}원  comment: {a.get('comment', '')}"
         for a in state["allocations"]
-    )
-    category_lines = "\n".join(
-        f"  - {c['name']}: {c['expense']:,}원 (소득의 {c['ratio']}%)"
-        for c in state["category_details"]
-    ) or "  소비 내역 없음"
-
-    prior_reasoning = state.get("reasoning", "").strip()
-    prior_section = (
-        f"\n[계획 reasoning — 참고만 할 것, 그대로 쓰지 말 것]\n{prior_reasoning}\n"
-        if prior_reasoning else ""
     )
 
     messages = [
         SystemMessage(content=_REFLECT_SYSTEM),
         HumanMessage(content=(
             f"PorTI 유형: {porti_detail(state['porti_type'])}\n"
-            f"사용자 투자 성향 코멘트: {state['porti_comment']}\n\n"
             f"가처분소득: {spendable:,}원\n"
-            f"투자 운용금: {invest_amount:,}원\n"
-            f"배분 가능 잔액 (가처분소득 - 투자금): {remaining:,}원\n\n"
-            f"[최종 배분 결과 — reasoning과 comment 재작성의 유일한 근거]\n"
+            f"투자 운용금: {invest_amount:,}원 (PorTI 허용 범위: {min_invest:,}원 ~ {max_invest:,}원)\n"
+            f"배분 가능 잔액: {remaining:,}원\n\n"
+            f"[배분 결과]\n"
             f"{alloc_lines}\n\n"
-            f"소비 패턴 (3개월 월평균):\n{category_lines}\n"
-            f"변동지출 합계: {state['category_total']:,}원\n"
-            f"저축 가능액(가처분소득 - 변동지출): {state['savings_capacity']:,}원\n\n"
-            f"[교정 기준]\n"
-            f"- 단일 항목 상한: {single_cap:,}원 (배분 가능액의 60%)\n"
-            f"- 항목 최소 금액: 50,000원"
-            f"{prior_section}"
+            f"[reasoning]\n{state.get('reasoning', '')}\n\n"
+            f"[커버리지 점검]\n"
+            f"- 사용 가능 계좌 수: {n_accounts}개 (유형: {asset_types_str})\n"
+            f"- 실제 배분 계좌 수: {n_alloc}개\n"
         )),
     ]
 
     result = await ainvoke_structured(messages, _ReflectOutput)
     if result is None:
-        return {**state, "approved": True}
+        return {**state, "approved": True, "iteration": next_iter}
 
-    next_iter = state.get("iteration", 0) + 1
-
-    # 거부: 재계획 필요 — allocations/reasoning은 그대로 유지
     if not result.approved:
         return {**state, "approved": False, "feedback": result.feedback, "iteration": next_iter}
 
-    try:
-        valid_ids = {a["asset_id"] for a in state["asset_list"]}
-        seen_ids: set[str] = set()
-        reviewed: list[dict] = []
-
-        for a in result.allocations:
-            if a.asset_id in valid_ids and a.amount > 0 and a.asset_id not in seen_ids:
-                reviewed.append({
-                    "asset_id": a.asset_id,
-                    "account_purpose": a.account_purpose,
-                    "amount": a.amount,
-                    "comment": a.comment,
-                })
-                seen_ids.add(a.asset_id)
-
-        # asset_id 검증 실패 시 원래 배분 유지하되 reasoning만 갱신
-        if not reviewed:
-            return {**state, "reasoning": result.reasoning, "approved": True, "iteration": next_iter}
-
-        if remaining > 0:
-            reviewed = normalize_to_thousands(reviewed, "amount", remaining)
-
-        return {
-            **state,
-            "reasoning": result.reasoning,
-            "allocations": reviewed,
-            "approved": True,
-            "iteration": next_iter,
-        }
-
-    except Exception as e:
-        logger.warning("reflect 처리 실패, 원래 결과 유지: %s", e)
-        return {
-            **state,
-            "reasoning": result.reasoning if result else state["reasoning"],
-            "approved": True,
-            "iteration": next_iter,
-        }
+    return {**state, "approved": True, "feedback": "", "iteration": next_iter}
 
 
 def _route_after_reflect(state: RebalanceState) -> str:
