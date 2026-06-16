@@ -30,6 +30,14 @@ _WATCHLIST: list[tuple[str, str]] = [
     ("KODEX 200", "069500.KS"),
 ]
 
+# 티커 → 한글 종목명 (챌린지 보상 종목명 표시용)
+_TICKER_NAME: dict[str, str] = {ticker: name for name, ticker in _WATCHLIST}
+
+
+def ticker_to_name(ticker: str | None) -> str | None:
+    """워치리스트 티커의 한글 종목명. 없으면 None."""
+    return _TICKER_NAME.get(ticker) if ticker else None
+
 _cache: dict[str, tuple[int, float]] = {}  # ticker -> (price_krw, fetched_at)
 _CACHE_TTL = 300  # 5분 캐시
 _executor = ThreadPoolExecutor(max_workers=4)
@@ -307,50 +315,65 @@ async def _search_etfs_db(
     min_trading_value: int = 100_000_000,
     limit: int = 15,
 ) -> list[dict]:
-    """pgvector hybrid search: 거래대금 필터 + 관심사 벡터 유사도 정렬."""
+    """pgvector hybrid search: 거래대금 + 음수수익률 제외 필터 + 관심사 벡터 유사도 정렬.
+
+    interest_rate 음수 종목은 데이터 기간(약 3년)에 갇힌 추세 아티팩트로 보고 후보에서 제외한다.
+    제외 후 후보가 하나도 없으면(슬롯이 음수 자산뿐인 경우) 음수 포함으로 폴백한다.
+    """
     pool = await get_pool()
     if not pool:
         return []
 
     user_embedding = await _get_embedding(" ".join(query_parts)) if query_parts else None
-
-    conditions = ["deleted_at IS NULL"]
-    params: list = []
-    idx = 1
-
-    if min_trading_value > 0:
-        conditions.append(f"avg_trading_value >= ${idx}")
-        params.append(min_trading_value)
-        idx += 1
-
-    where = " AND ".join(conditions)
     select_cols = (
         "product_type, institution, name, ticker, interest_rate, description, "
         "avg_trading_value, acc_trdvol, idx_ind_nm, close_prc, nav, volatility"
     )
 
-    if user_embedding:
-        vec_str = "[" + ",".join(f"{x:.8f}" for x in user_embedding) + "]"
-        query = (
-            f"SELECT {select_cols} FROM products WHERE {where} "
-            f"ORDER BY embedding <=> ${idx}::vector "
-            f"LIMIT ${idx + 1}"
-        )
-        params.extend([vec_str, limit])
-    else:
-        query = (
-            f"SELECT {select_cols} FROM products WHERE {where} "
-            f"ORDER BY interest_rate DESC NULLS LAST "
-            f"LIMIT ${idx}"
-        )
-        params.append(limit)
+    async def _run(exclude_negative: bool) -> list[dict]:
+        conditions = ["deleted_at IS NULL"]
+        params: list = []
+        idx = 1
 
-    try:
-        rows = await pool.fetch(query, *params)
-        return [dict(r) for r in rows]
-    except Exception as e:
-        logger.warning("ETF DB 검색 실패: %s", e)
-        return []
+        if min_trading_value > 0:
+            conditions.append(f"avg_trading_value >= ${idx}")
+            params.append(min_trading_value)
+            idx += 1
+
+        if exclude_negative:
+            # 추세 음수 수익률 제외 (NULL은 '미상'이라 남겨둔다)
+            conditions.append("(interest_rate >= 0 OR interest_rate IS NULL)")
+
+        where = " AND ".join(conditions)
+
+        if user_embedding:
+            vec_str = "[" + ",".join(f"{x:.8f}" for x in user_embedding) + "]"
+            query = (
+                f"SELECT {select_cols} FROM products WHERE {where} "
+                f"ORDER BY embedding <=> ${idx}::vector "
+                f"LIMIT ${idx + 1}"
+            )
+            params.extend([vec_str, limit])
+        else:
+            query = (
+                f"SELECT {select_cols} FROM products WHERE {where} "
+                f"ORDER BY interest_rate DESC NULLS LAST "
+                f"LIMIT ${idx}"
+            )
+            params.append(limit)
+
+        try:
+            rows = await pool.fetch(query, *params)
+            return [dict(r) for r in rows]
+        except Exception as e:
+            logger.warning("ETF DB 검색 실패: %s", e)
+            return []
+
+    rows = await _run(exclude_negative=True)
+    if not rows:
+        logger.info("음수 제외 후보 0개 → 음수 포함으로 폴백")
+        rows = await _run(exclude_negative=False)
+    return rows
 
 
 @tool
