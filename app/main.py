@@ -20,11 +20,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.core.exceptions import register_exception_handlers
-from app.db.connection import close_pool
+from app.services.rag.db import close_pool
 from app.routers.mini_challenge import router as mini_challenge_router
 from app.routers.portfolio import router as portfolio_router
 from app.routers.report import router as report_router
-from app.routers.consultant import router as consultant_router
 from app.routers.salary import router as salary_router
 
 logger = logging.getLogger(__name__)
@@ -39,6 +38,7 @@ async def lifespan(app: FastAPI):
         logger.warning("Kafka 연결 실패 — 로그 전송 비활성화: %s", e)
     yield
     await stop_producer()
+    await close_pool()
 
 
 app = FastAPI(
@@ -65,7 +65,6 @@ Instrumentator().instrument(app).expose(app)
 app.include_router(mini_challenge_router)
 app.include_router(portfolio_router)
 app.include_router(report_router)
-app.include_router(consultant_router)
 app.include_router(salary_router)
 
 
