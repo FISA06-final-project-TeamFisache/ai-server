@@ -102,13 +102,6 @@ def pick_stock(
     return min(final_pool, key=lambda x: abs(x[3] - 1.0))
 
 
-@tool
-async def get_stock_prices() -> list[dict]:
-    """관심 종목의 현재 주가를 조회합니다. 챌린지 추천 종목(ticker) 선택 시 반드시 호출하세요."""
-    prices = await get_all_prices()
-    return [{"name": n, "ticker": t, "price_krw": p} for n, t, p in prices]
-
-
 def normalize_ratios(items: list[dict], key: str = "ratio") -> list[dict]:
     """비율 합계가 100이 되도록 정규화. 반올림 오차는 첫 항목에 흡수."""
     if not items:
@@ -122,18 +115,6 @@ def normalize_ratios(items: list[dict], key: str = "ratio") -> list[dict]:
         result[0] = {**result[0], key: result[0][key] + diff}
     return result
 
-
-def normalize_amounts(items: list[dict], key: str, target: int) -> list[dict]:
-    """금액 합계가 target이 되도록 비례 조정. 반올림 오차는 마지막 항목에 흡수."""
-    if not items or target <= 0:
-        return items
-    total_weight = sum(v[key] for v in items) or 1
-    scale = target / total_weight
-    result = [{**v, key: max(0, round(v[key] * scale))} for v in items]
-    diff = target - sum(v[key] for v in result)
-    if diff != 0:
-        result[-1] = {**result[-1], key: max(0, result[-1][key] + diff)}
-    return result
 
 def normalize_to_thousands(items: list[dict], key: str, total: int) -> list[dict]:
     """비례 배분 후 천원 단위 반올림. 합계는 total의 천원 내림값에 맞춤."""
