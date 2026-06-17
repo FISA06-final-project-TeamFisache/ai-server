@@ -202,7 +202,8 @@ def compound_interest(monthly_amount: int, annual_rate_pct: float, months: int) 
     months: 적립 기간(개월)
     Returns: {"expected_amount": int, "total_principal": int}
     """
-    r_m = annual_rate_pct / 100 / 12  # 월이율
+    # 연 단위 복리 → 유효 월이율로 변환: (1+r_annual)^(1/12) - 1
+    r_m = (1 + annual_rate_pct / 100) ** (1 / 12) - 1
     if r_m > 0:
         fv = monthly_amount * ((math.pow(1 + r_m, months) - 1) / r_m)
     else:
@@ -277,17 +278,20 @@ async def calculate_hrp_weights(tickers: list[str]) -> dict:
         try:
             perf_ret, _vol, _sharpe = hrp.portfolio_performance(verbose=False, risk_free_rate=0.02)
             expected_annual_return_pct: float | None = round(float(perf_ret) * 100, 2)
+            expected_annual_vol_pct: float | None = round(float(_vol) * 100, 2)
         except Exception as perf_err:
             logger.warning("HRP portfolio_performance 실패: %s", perf_err)
             expected_annual_return_pct = None
+            expected_annual_vol_pct = None
 
-        logger.info("HRP 완료 | %d일 | 기대수익률: %s%% | %s", len(prices), expected_annual_return_pct, weight_ints)
+        logger.info("HRP 완료 | %d일 | 기대수익률: %s%% | 변동성: %s%% | %s", len(prices), expected_annual_return_pct, expected_annual_vol_pct, weight_ints)
         return {
             "weights": weight_ints,
             "method": "hrp",
             "data_days": len(prices),
             "metrics": metrics,
             "expected_annual_return_pct": expected_annual_return_pct,
+            "expected_annual_vol_pct": expected_annual_vol_pct,
         }
 
     except Exception as e:

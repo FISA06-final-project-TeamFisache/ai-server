@@ -6,7 +6,7 @@ from typing import Annotated, Literal, TypedDict
 from uuid import UUID
 
 from langchain.agents import create_agent
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
 from langgraph.types import Send
 from pydantic import BaseModel, model_validator
@@ -490,29 +490,37 @@ async def _node_executor(flow_state: FlowState) -> dict:
     if not plan["can_invest"]:
         return {**flow_state, "portfolio": []}
 
+    # response_format 제거: with_structured_output이 tool 호출을 억제하는 문제 방지
     agent = create_agent(
         model=get_llm(),
         tools=[search_etfs],
         system_prompt=_SYSTEM_EXECUTOR,
-        response_format=_PortfolioOutput,
     )
     portfolio: list[dict] = []
     try:
         result = await agent.ainvoke(
             {"messages": [HumanMessage(content=_build_executor_ctx(plan, shared))]},
-            config={"recursion_limit": 8},
+            config={"recursion_limit": 16},
         )
-        structured = result.get("structured_response")
-        if structured:
-            portfolio = [
-                {
-                    "name": item.name,
-                    "ticker": item.ticker,
-                    "product_type": "ETF",
-                    "interest_rate": item.interest_rate,
-                }
-                for item in structured.portfolio
-            ]
+        # 마지막 AIMessage content에서 JSON 파싱 (tool 호출 후 최종 응답)
+        for msg in reversed(result.get("messages", [])):
+            if isinstance(msg, AIMessage) and isinstance(msg.content, str) and "portfolio" in msg.content:
+                m = re.search(r'\{.*\}', msg.content, re.DOTALL)
+                if m:
+                    try:
+                        out = _PortfolioOutput.model_validate_json(m.group())
+                        portfolio = [
+                            {
+                                "name": item.name,
+                                "ticker": item.ticker,
+                                "product_type": "ETF",
+                                "interest_rate": item.interest_rate,
+                            }
+                            for item in out.portfolio
+                        ]
+                    except Exception:
+                        pass
+                break
     except Exception as e:
         logger.warning("[%s] Executor 실패: %s", plan["flow_type"], e)
 
@@ -542,6 +550,7 @@ async def _node_verifier(flow_state: FlowState) -> dict:
 
     # HRP 비중 최적화 (tool이 내부적으로 균등 배분 폴백을 처리함)
     expected_rr_from_hrp: float | None = None
+    expected_vol_from_hrp: float | None = None
     if len(portfolio) >= 2:
         tickers = [item["ticker"] for item in portfolio if item.get("ticker")]
         if tickers:
@@ -553,6 +562,7 @@ async def _node_verifier(flow_state: FlowState) -> dict:
                 for item in portfolio
             ])
             expected_rr_from_hrp = hrp_result.get("expected_annual_return_pct")
+            expected_vol_from_hrp = hrp_result.get("expected_annual_vol_pct")
     elif len(portfolio) == 1:
         portfolio = [{**portfolio[0], "ratio": 100}]
 
@@ -560,6 +570,11 @@ async def _node_verifier(flow_state: FlowState) -> dict:
     ga = plan["gathering_account"]
     if expected_rr_from_hrp and expected_rr_from_hrp > 0:
         expected_rr = expected_rr_from_hrp
+        # 분산 고려 수익률: expected_rr - σ²/2 (Itô 보정 — 변동성 드래그 반영)
+        if expected_vol_from_hrp and expected_vol_from_hrp > 0:
+            sigma_sq = (expected_vol_from_hrp / 100) ** 2
+            expected_rr = max(expected_rr - sigma_sq / 2 * 100, 0.0)
+            logger.info("[%s] 분산 보정: %.2f%% → %.2f%% (σ=%.1f%%)", plan["flow_type"], expected_rr_from_hrp, expected_rr, expected_vol_from_hrp)
     else:
         expected_rr = float(ga.get("interest_rate", 0.0) or 0.0)
         if not portfolio and expected_rr == 0.0:
